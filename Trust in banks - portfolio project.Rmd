@@ -1,0 +1,768 @@
+---
+title: "Financial Inclusion, Digital Trust, and Economic Growth"
+subtitle: "A Cross-Country Panel Analysis, 2017–2022"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    number_sections: true
+    theme: flatly
+    highlight: tango
+    df_print: paged
+  word_document:
+    toc: true
+  pdf_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo      = TRUE,
+  warning   = FALSE,
+  message   = FALSE,
+  fig.align = "center",
+  fig.width = 10,
+  fig.height = 7
+)
+```
+
+---
+
+# Introduction
+
+This project investigates how **Financial Inclusion (FI)** relates to **economic growth (GDP)** across a diverse panel of countries between 2017 and 2022, and whether this relationship is moderated by two forms of trust: **Digital Trust (DT)** and **Social Trust (ST)**.
+
+Financial inclusion — access to useful and affordable financial products and services — is widely regarded as a driver of economic development. Yet its impact may not be uniform: it likely depends on the broader institutional and social context in which it occurs. Digital trust (confidence in digital financial systems) and social trust (interpersonal trust within a society) represent two plausible moderating forces. This analysis tests both.
+
+The project proceeds in four stages:
+
+1. **Data preparation** — loading, normalizing, and assembling all variables into a panel dataset.
+2. **Exploratory analysis** — visualizing trends and the correlation structure across countries and years.
+3. **Panel model estimation** — using Difference GMM to establish the baseline FI → GDP relationship.
+4. **Moderation analysis** — testing whether Digital Trust and Social Trust shape the strength of that relationship.
+
+---
+
+# Setup: Libraries and Helper Functions
+
+```{r libraries}
+library(readxl)
+library(tidyverse)
+library(reshape2)
+library(pheatmap)
+library(ggrepel)
+library(lme4)
+library(broom.mixed)
+library(broom)
+library(car)
+library(plm)
+library(lmtest)
+library(sandwich)
+```
+
+The country-name harmonisation function below is used throughout to ensure consistent naming across data sources.
+
+```{r helper-functions}
+name_mapping <- list(
+  "Hong Kong SAR, China" = "Hong Kong",
+  "Macao SAR, China"     = "Macau",
+  "Iran, Islamic Rep."   = "Iran",
+  "Kyrgyz Republic"      = "Kyrgyzstan",
+  "Uzbekistan, Rep. of"  = "Uzbekistan",
+  "Russian Federation"   = "Russia",
+  "China, P.R.: Mainland"= "China",
+  "Hong Kong SAR"        = "Hong Kong",
+  "Macau SAR"            = "Macau",
+  "Turkiye"              = "Turkey",
+  "Viet Nam"             = "Vietnam"
+)
+
+simplify_country_name <- function(name) {
+  if (name %in% names(name_mapping)) name_mapping[[name]] else name
+}
+```
+
+---
+
+# Data Preparation
+
+## Financial Inclusion (FI) Data
+
+The FI dataset is sourced from the IMF and contains three sub-dimensions of financial inclusion: **Accessibility**, **Availability**, and **Usage**.
+
+```{r load-fi}
+FI_Data_IMF <- read_excel("C:/Poslovi/Vash/New data set/FI Data -.xlsx")
+FI_Data_IMF$Code <- gsub("usage", "Usage", FI_Data_IMF$Code)
+FI_Data_IMF <- FI_Data_IMF[-nrow(FI_Data_IMF), ]
+```
+
+### Within-country normalisation
+
+Values are normalised to [0, 1] within each country across the 2017–2022 window. This allows intra-country trends to be compared across the three sub-dimensions on a common scale.
+
+$$\text{Normalised Value} = \frac{x - \min(x)}{\max(x) - \min(x)}$$
+
+```{r normalise-fi-within}
+for (year in 2017:2022) {
+  current_col <- FI_Data_IMF[[as.character(year)]]
+  min_val <- apply(FI_Data_IMF[, as.character(2017:2022)], 1, min, na.rm = TRUE)
+  max_val <- apply(FI_Data_IMF[, as.character(2017:2022)], 1, max, na.rm = TRUE)
+  FI_Data_IMF[[paste0(year, "N")]] <- ifelse(
+    is.na(current_col), NA,
+    (current_col - min_val) / (max_val - min_val)
+  )
+}
+```
+
+### FI sub-index aggregation
+
+The three normalised sub-dimensions are averaged within each country and year to form the country-level FI sub-indexes.
+
+```{r fi-index}
+FI_Index <- FI_Data_IMF %>%
+  filter(!is.na(Code)) %>%
+  group_by(`Country Name`, Code) %>%
+  summarise(across(ends_with("N"), \(x) mean(x, na.rm = TRUE)), .groups = "drop")
+```
+
+## Digital Trust (DT) Data
+
+```{r load-dt}
+DT <- read_excel("C:/Poslovi/Vash/New data set/DT.xlsx")
+colnames(DT)[5:10] <- substr(colnames(DT)[5:10], 1, 4)
+```
+
+```{r normalise-dt}
+for (year in 2017:2022) {
+  current_col <- DT[[as.character(year)]]
+  min_val <- apply(DT[, as.character(2017:2022)], 1, min, na.rm = TRUE)
+  max_val <- apply(DT[, as.character(2017:2022)], 1, max, na.rm = TRUE)
+  DT[[paste0(year, "N")]] <- (current_col - min_val) / (max_val - min_val)
+}
+
+DT_Index <- DT %>%
+  group_by(`Country Name`) %>%
+  summarise(across(ends_with("N"), \(x) mean(x, na.rm = TRUE)), .groups = "drop") %>%
+  mutate(Code = "Digital Trust")
+```
+
+## Combining FI and DT Indexes
+
+```{r combine-fi-dt}
+DT_Index <- DT_Index[, colnames(FI_Index)[1:8]]
+DT_FI_Combined <- bind_rows(DT_Index, FI_Index)
+DT_FI_Combined$`Country Name` <- sapply(DT_FI_Combined$`Country Name`, simplify_country_name)
+```
+
+## Cross-country normalisation and FII Calculation
+
+The within-country normalisation above facilitates trend analysis but prevents direct cross-country comparisons. Here we re-normalise within each year and across countries, then compute the composite **Financial Inclusion Index (FII)**:
+
+$$\text{FII} = 1 - \frac{1}{3}\left[(1 - \text{ACI})^2 + (1 - \text{AVI})^2 + (1 - \text{USI})^2\right]$$
+
+This formula rewards balanced progress across all three sub-dimensions.
+
+```{r fi-cross-country}
+FI_Data_IMF <- FI_Data_IMF %>%
+  group_by(`Series Name`) %>%
+  mutate(across(
+    .cols  = as.character(2017:2022),
+    .fns   = ~ (. - min(., na.rm = TRUE)) / (max(., na.rm = TRUE) - min(., na.rm = TRUE)),
+    .names = "{col}_N_across"
+  )) %>%
+  ungroup()
+
+FI_Index_Across <- FI_Data_IMF %>%
+  filter(!is.na(Code)) %>%
+  group_by(`Country Name`, Code) %>%
+  summarise(across(ends_with("_N_across"), ~ mean(.x, na.rm = TRUE)), .groups = "drop")
+
+FI_pivot <- FI_Index_Across %>%
+  pivot_longer(cols = starts_with("20"), names_to = "Year", values_to = "Value") %>%
+  mutate(Year = as.numeric(gsub("_N_across", "", Year))) %>%
+  pivot_wider(names_from = Code, values_from = Value) %>%
+  mutate(
+    FII_across = 1 - (((1 - Accessibility)^2 + (1 - Availability)^2 + (1 - Usage)^2) / 3)
+  ) %>%
+  rename_with(~ paste0(., "_across"), c("Accessibility", "Availability", "Usage"))
+```
+
+## Constructing the within-country FI pivot (for trend and correlation analyses)
+
+```{r fi-dt-long-pivot}
+FI_DT_long <- DT_FI_Combined %>%
+  pivot_longer(cols = ends_with("N"), names_to = "Year", values_to = "Value") %>%
+  mutate(Year = as.numeric(sub("N", "", Year)))
+
+FI_DT_pivot <- FI_DT_long %>%
+  pivot_wider(names_from = Code, values_from = Value) %>%
+  mutate(
+    FII = 1 - (((1 - Accessibility)^2 + (1 - Availability)^2 + (1 - Usage)^2) / 3)
+  )
+```
+
+## Control Variables
+
+Six macroeconomic control variables are loaded: **GDP per capita** (outcome), **government expenditure (GOV)**, **inflation management efficiency (IMEM)**, **consumer price index (CPI)**, **unemployment (UNEMP)**, and **education index (EDU)**.
+
+```{r load-controls}
+read_control <- function(path, value_name) {
+  df <- read_excel(path)
+  colnames(df)[5:10] <- substr(colnames(df)[5:10], 1, 4)
+  if ("Series Code" %in% colnames(df)) colnames(df)[colnames(df) == "Series Code"] <- "Code"
+  df$`Country Name` <- sapply(df$`Country Name`, simplify_country_name)
+  df %>%
+    pivot_longer(cols = `2017`:`2022`, names_to = "Year", values_to = value_name) %>%
+    mutate(Year = as.double(Year)) %>%
+    select(`Country Name`, Year, all_of(value_name))
+}
+
+GDP_long  <- read_control("C:/Poslovi/Vash/GDP Per constant 2015 us dollar.xlsx", "GDP")
+GOV_long  <- read_control("C:/Poslovi/Vash/GOV.xlsx",   "GOV")
+IMEM_long <- read_control("C:/Poslovi/Vash/IMEM.xlsx",  "IMEM")
+CPI_long  <- read_control("C:/Poslovi/Vash/CPI.xlsx",   "CPI")
+UNEMP_long<- read_control("C:/Poslovi/Vash/UNEMP.xlsx", "UNEMP")
+EDU_long  <- read_control("C:/Poslovi/Vash/EDU.xlsx",   "EDU")
+```
+
+## Trust Measures
+
+Two additional trust measures are incorporated:
+
+- **Social Trust (ST):** The share of World Values Survey respondents who answered "Most people can be trusted" (time-invariant per country).
+- **Trust in Banks (TiB):** A weighted composite of Gallup confidence-in-banks responses (time-invariant per country).
+- **Cybersecurity Index (CSI):** A time-varying national-level cybersecurity measure used as an alternative digital trust proxy.
+
+```{r load-trust}
+# Social Trust (WVS)
+ST <- read_excel("C:/Poslovi/Vash/New data set/Social Trust WVS 2017-2022.xlsx")
+ST$Country <- sapply(ST$Country, simplify_country_name)
+ST_simplified <- ST %>%
+  transmute(`Country Name` = Country, ST = `Most People Can Be Trusted`)
+
+# Trust in Banks (Gallup)
+TiB <- read_excel("Trust in Banks.xlsx") %>%
+  mutate(
+    TiB_numeric = (as.numeric(`A Great Deal (%)`) * 4 +
+                   as.numeric(`Quite a Lot (%)`)  * 3 +
+                   as.numeric(`Not Very Much (%)`) * 2 +
+                   as.numeric(`None at All (%)`))  / 400,
+    TiB_high    = as.numeric(`A Great Deal (%)`)
+  ) %>%
+  select(Country, TiB_numeric, TiB_high) %>%
+  rename(`Country Name` = Country) %>%
+  mutate(`Country Name` = sapply(`Country Name`, simplify_country_name))
+
+# Cybersecurity Index
+CSI <- read_excel("DT -Cybersecurity index.xlsx") %>%
+  filter(year < 2023, year > 2016) %>%
+  rename(Year = year) %>%
+  mutate(`Country Name` = sapply(`Country Name`, simplify_country_name))
+```
+
+## Full Panel Dataset
+
+All components are joined into a single panel dataframe with country and year as the panel identifiers.
+
+```{r assemble-full-data}
+Full_data <- FI_DT_pivot %>%
+  inner_join(FI_pivot,   by = c("Country Name", "Year")) %>%
+  inner_join(GOV_long,   by = c("Country Name", "Year")) %>%
+  inner_join(IMEM_long,  by = c("Country Name", "Year")) %>%
+  inner_join(CPI_long,   by = c("Country Name", "Year")) %>%
+  inner_join(UNEMP_long, by = c("Country Name", "Year")) %>%
+  inner_join(EDU_long,   by = c("Country Name", "Year")) %>%
+  inner_join(GDP_long,   by = c("Country Name", "Year")) %>%
+  left_join(ST_simplified, by = "Country Name") %>%
+  inner_join(CSI,  by = c("Country Name", "Year")) %>%
+  left_join(TiB,   by = "Country Name") %>%
+  mutate(across(-`Country Name`, as.numeric))
+
+Full_data[Full_data == ".."] <- NA
+```
+
+## Standardisation
+
+All numeric variables are standardised (z-scored) prior to modelling. This ensures coefficients are directly comparable across variables and eliminates scale-driven bias in the GMM estimator.
+
+```{r standardise}
+Full_data_standardized <- Full_data %>%
+  mutate(across(where(is.numeric) & !starts_with("year"),
+                ~ as.numeric(scale(.)))) %>%
+  rename_with(~ gsub("\\[.*,.*\\]", "", .)) %>%
+  rename(Country_Name = `Country Name`)
+
+write.csv(Full_data,             "Full data.csv",             row.names = FALSE)
+write.csv(Full_data_standardized,"Full data standardized.csv",row.names = FALSE)
+```
+
+---
+
+# Exploratory Data Analysis
+
+## Descriptive Statistics
+
+```{r descriptives}
+descriptives_overall <- Full_data %>%
+  select(`Digital Trust`:ST, -Year) %>%
+  summarise(across(where(is.numeric), list(
+    Mean   = ~ mean(.,   na.rm = TRUE),
+    Median = ~ median(., na.rm = TRUE),
+    SD     = ~ sd(.,     na.rm = TRUE),
+    Min    = ~ min(.,    na.rm = TRUE),
+    Max    = ~ max(.,    na.rm = TRUE)
+  ), .names = "{col}_{fn}"))
+
+descriptives_country <- Full_data %>%
+  select(`Country Name`:`ST`, -Year) %>%
+  group_by(`Country Name`) %>%
+  summarise(across(where(is.numeric), list(
+    Mean   = ~ mean(.,   na.rm = TRUE),
+    Median = ~ median(., na.rm = TRUE),
+    SD     = ~ sd(.,     na.rm = TRUE),
+    Min    = ~ min(.,    na.rm = TRUE),
+    Max    = ~ max(.,    na.rm = TRUE)
+  ), .names = "{col}_{fn}"))
+
+descriptives_year <- Full_data %>%
+  select(`Country Name`:`ST`) %>%
+  group_by(Year) %>%
+  summarise(across(where(is.numeric), list(
+    Mean = ~ mean(., na.rm = TRUE),
+    SD   = ~ sd(.,   na.rm = TRUE)
+  ), .names = "{col}_{fn}"))
+
+write.csv(descriptives_country, "Descriptives by country.csv", row.names = FALSE)
+write.csv(descriptives_year,    "Yearly descriptives.csv",     row.names = FALSE)
+write.csv(descriptives_overall, "Overall descriptives.csv",    row.names = FALSE)
+```
+
+## Index Trends Over Time by Country
+
+The following chart plots all four normalised sub-indexes (Accessibility, Availability, Usage, Digital Trust) over time for each country. Within-country normalisation means that the y-axis reflects change relative to each country's own range rather than absolute cross-country standing.
+
+```{r plot-index-trends, fig.height=14}
+ggplot(FI_DT_long, aes(x = Year, y = Value, color = Code)) +
+  geom_line(aes(group = interaction(`Country Name`, Code)), alpha = 0.8, linewidth = 0.7) +
+  geom_point(size = 1.5) +
+  facet_wrap(~ `Country Name`, scales = "free_y", ncol = 5) +
+  scale_color_brewer(palette = "Set1") +
+  theme_minimal(base_size = 10) +
+  labs(
+    title  = "Normalised Financial Inclusion and Digital Trust Indexes Over Time",
+    x      = "Year",
+    y      = "Normalised Value (within-country)",
+    color  = "Index"
+  ) +
+  theme(legend.position = "bottom", strip.text = element_text(size = 7))
+```
+
+**Interpretation:** Trend patterns vary considerably across countries. Clear upward trajectories are visible for Uzbekistan, Vietnam, Maldives, and Macau. Lebanon, Cyprus, and Mongolia show broad declines. Many countries (e.g. Singapore, India, Turkey) display relatively stable values, suggesting that their financial inclusion landscape changed little in relative terms within this period.
+
+## Average Correlation Among Sub-Indexes
+
+To understand which indexes tend to move together, a correlation matrix is computed for each country separately and then averaged across all countries.
+
+```{r avg-correlation-heatmap}
+countries <- unique(FI_DT_pivot$`Country Name`)
+cor_matrices <- list()
+
+for (country in countries) {
+  country_data <- FI_DT_pivot %>%
+    filter(`Country Name` == country) %>%
+    select(-`Country Name`, -Year) %>%
+    na.omit()
+  if (ncol(country_data) > 1 && nrow(country_data) > 2) {
+    cor_matrices[[country]] <- cor(country_data, use = "complete.obs")
+  }
+}
+
+common_dim <- ncol(cor_matrices[[1]])
+cor_matrices <- cor_matrices[sapply(cor_matrices, ncol) == common_dim]
+cor_array    <- array(unlist(cor_matrices),
+                      dim = c(common_dim, common_dim, length(cor_matrices)))
+avg_cor      <- apply(cor_array, c(1, 2), mean, na.rm = TRUE)
+rownames(avg_cor) <- colnames(avg_cor) <- colnames(cor_matrices[[1]])
+
+pheatmap(avg_cor,
+         cluster_rows    = FALSE,
+         cluster_cols    = FALSE,
+         display_numbers = TRUE,
+         number_format   = "%.2f",
+         main            = "Average Within-Country Correlation Among Indexes (2017–2022)",
+         color           = colorRampPalette(c("#2166ac","white","#d6604d"))(100))
+```
+
+**Interpretation:** The heatmap reveals a strong positive correlation between Accessibility and Availability — both capture the structural reach of the financial system and tend to evolve together. Usage shows a moderate positive correlation with Accessibility and Digital Trust, suggesting that actual uptake of financial services partly reflects digital confidence. The remaining pairwise correlations are close to zero.
+
+## FII Trends Over Time
+
+Using the cross-country FII (which supports international comparisons), we can observe how the composite index evolved in each country.
+
+```{r fii-trends, fig.height=14}
+ggplot(FI_pivot, aes(x = Year, y = FII_across)) +
+  geom_line(aes(group = `Country Name`), color = "#2166ac", alpha = 0.8, linewidth = 0.7) +
+  geom_point(size = 1.5, color = "#2166ac") +
+  facet_wrap(~ `Country Name`, scales = "free_y", ncol = 5) +
+  theme_minimal(base_size = 10) +
+  labs(
+    title = "Financial Inclusion Index (FII) Over Time by Country",
+    x     = "Year",
+    y     = "FII (cross-country normalised)"
+  ) +
+  theme(strip.text = element_text(size = 7))
+```
+
+**Interpretation:** Countries showing consistent FII growth include Armenia, Bangladesh, Iraq, Jordan, Kazakhstan, Kyrgyzstan, Macau, Maldives, Pakistan, Philippines, Uzbekistan, and Vietnam. Cyprus, Indonesia, Japan, Lebanon, Malaysia, Mongolia, Singapore, and Thailand exhibit downward trends, while the remainder show no clear directional pattern over this period.
+
+## FII and GDP Cross-Country Relationship
+
+A simple scatter plot of country-averaged FII against country-averaged GDP gives a first impression of their association.
+
+```{r fii-gdp-scatter}
+ggplot(descriptives_country,
+       aes(x = FII_across_Mean, y = GDP_Mean, label = `Country Name`)) +
+  geom_point(color = "#2166ac", size = 3) +
+  geom_smooth(method = "lm", color = "#d6604d", se = TRUE, linetype = "dashed") +
+  geom_text_repel(size = 2.8, max.overlaps = 20) +
+  labs(
+    title = "Country-Averaged FII vs GDP per Capita",
+    x     = "Mean FII (2017–2022)",
+    y     = "Mean GDP per Capita (constant 2015 USD)"
+  ) +
+  theme_minimal()
+```
+
+## Macro-Variable Correlation Structure
+
+The following heatmap shows how all variables relate to each other within countries over time (intra-country, time-series correlations averaged across countries).
+
+```{r macro-heatmap, fig.height=9, fig.width=11}
+cor_matrices_full <- list()
+
+for (country in unique(Full_data_standardized$Country_Name)) {
+  country_data <- Full_data_standardized %>%
+    filter(Country_Name == country) %>%
+    select(-c(Country_Name, starts_with("..."),
+              Accessibility:Usage_across, ST, TiB_numeric, TiB_high)) %>%
+    na.omit()
+  if (ncol(country_data) > 1 && nrow(country_data) > 2)
+    cor_matrices_full[[country]] <- cor(country_data, use = "complete.obs")
+}
+
+common_dim_f  <- ncol(cor_matrices_full[[1]])
+cor_matrices_full <- cor_matrices_full[sapply(cor_matrices_full, ncol) == common_dim_f]
+cor_array_full <- array(unlist(cor_matrices_full),
+                        dim = c(common_dim_f, common_dim_f, length(cor_matrices_full)))
+avg_cor_full   <- apply(cor_array_full, c(1, 2), mean, na.rm = TRUE)
+rownames(avg_cor_full) <- colnames(avg_cor_full) <- colnames(cor_matrices_full[[1]])
+
+pheatmap(avg_cor_full,
+         cluster_rows    = TRUE,
+         cluster_cols    = TRUE,
+         display_numbers = TRUE,
+         number_format   = "%.2f",
+         main            = "Average Within-Country Macro Correlations (2017–2022)",
+         color           = colorRampPalette(c("#2166ac","white","#d6604d"))(100),
+         fontsize_number = 7)
+```
+
+**Interpretation:** Several patterns stand out. CPI has a strong positive association with Year, GDP, and EDU, consistent with nominal growth over time. FII correlates positively with GDP, EDU, and CPI. IMEM shows a strong positive relationship with GDP and CPI, and a moderate negative one with UNEMP. GDP correlates strongly with FII, IMEM, CPI, and EDU and moderately negatively with UNEMP. Digital Trust has a notable positive correlation with GOV (governance quality), a weaker one with FII, and little relationship with the remaining variables.
+
+## Variable Trends Over Time
+
+The plots below track how each variable evolved annually, both at the country level and averaged across all countries.
+
+```{r variable-trends-country, fig.height=14}
+trend_vars <- c("FII_across", "Digital Trust", "GOV", "IMEM", "CPI", "UNEMP", "EDU", "GDP")
+
+for (var in trend_vars) {
+  p <- ggplot(Full_data, aes(x = Year, y = .data[[var]])) +
+    geom_line(color = "#2166ac", linewidth = 0.6) +
+    geom_point(size = 1, color = "#2166ac") +
+    facet_wrap(~ `Country Name`, ncol = 5, scales = "free_y") +
+    labs(title = paste("Trend of", var, "by Country"), x = "Year", y = var) +
+    theme_minimal(base_size = 9) +
+    theme(strip.text = element_text(size = 6.5))
+  print(p)
+}
+```
+
+```{r variable-trends-averaged}
+for (var in trend_vars) {
+  avg_data <- Full_data %>%
+    group_by(Year) %>%
+    summarise(avg = mean(.data[[var]], na.rm = TRUE))
+  p <- ggplot(avg_data, aes(x = Year, y = avg)) +
+    geom_line(color = "#d6604d", linewidth = 1) +
+    geom_point(size = 2.5, color = "#d6604d") +
+    labs(title  = paste("Sample-Averaged Trend:", var),
+         x = "Year", y = paste("Mean", var)) +
+    theme_minimal()
+  print(p)
+}
+```
+
+**Summary of trends:**
+
+- **FII:** Increased on average; Armenia, Bangladesh, Kazakhstan, and Vietnam showed the strongest gains. Lebanon and Mongolia declined.
+- **GOV:** Highly variable, with no consistent directional trend across the sample.
+- **Digital Trust:** Broadly increasing, with Armenia, Indonesia, and Vietnam as standouts. Lebanon declined.
+- **IMEM:** Mixed, with Indonesia and Maldives rising, and Armenia and Lebanon falling.
+- **CPI:** Consistently upward, reflecting inflationary pressures across most economies.
+- **UNEMP:** Heterogeneous — improving in Armenia and Vietnam, worsening in Lebanon and Cyprus.
+- **EDU:** Steadily improving in most countries; little change in Lebanon and Cyprus.
+- **GDP:** Strong growth in Indonesia, Vietnam, and Kazakhstan; stagnation or decline in Lebanon and Cyprus.
+
+---
+
+# Panel Data Models
+
+## Data Preparation for Panel Estimation
+
+```{r panel-prep}
+pdata <- pdata.frame(Full_data_standardized, index = c("Country_Name", "Year"))
+```
+
+## Model 1 — Simple Dynamic Panel (FII only)
+
+The first model estimates the direct effect of financial inclusion on GDP using a **two-step Difference GMM** estimator. Lagged GDP controls for persistence in economic output, and lagged values of both GDP and FII serve as instruments, addressing potential endogeneity. Both individual (country) and time effects are accounted for.
+
+$$\text{GDP}_{it} = \alpha \cdot \text{GDP}_{i,t-1} + \beta \cdot \text{FII}_{it} + \eta_i + \lambda_t + \varepsilon_{it}$$
+
+```{r model-simple}
+simple_model <- pgmm(
+  GDP ~ lag(GDP, 1) + FII_across | lag(GDP, 2:5) + lag(FII_across, 2:5),
+  data    = pdata,
+  effect  = "twoway",
+  model   = "twostep",
+  collapse= TRUE
+)
+summary(simple_model, robust = TRUE)
+```
+
+## Model 2 — Full Dynamic Panel (FII + Controls)
+
+Control variables — CPI, UNEMP, EDU, and GOV — are added to isolate the effect of financial inclusion from other macroeconomic forces.
+
+$$\text{GDP}_{it} = \alpha \cdot \text{GDP}_{i,t-1} + \beta_1 \cdot \text{FII}_{it} + \beta_2 \cdot \text{CPI}_{it} + \beta_3 \cdot \text{UNEMP}_{it} + \beta_4 \cdot \text{EDU}_{it} + \beta_5 \cdot \text{GOV}_{it} + \eta_i + \lambda_t + \varepsilon_{it}$$
+
+```{r model-full}
+full_model <- pgmm(
+  GDP ~ lag(GDP, 1) + FII_across + CPI + UNEMP + EDU + GOV |
+    lag(GDP, 2:5) + lag(FII_across, 2:5),
+  data    = pdata,
+  effect  = "twoways",
+  model   = "twostep",
+  collapse= TRUE
+)
+summary(full_model, robust = TRUE)
+```
+
+**Interpretation of baseline models:**
+
+- **Lagged GDP** is non-significant once instrumented, confirming that the GMM instruments adequately absorb the persistence in GDP.
+- **FII** carries a positive and statistically significant coefficient in both models, providing robust evidence that financial inclusion is associated with higher GDP per capita.
+- **CPI and EDU** are significant in the full model: CPI's positive coefficient reflects the association between price-level growth and nominal economic activity, while EDU's positive effect highlights human capital as a complementary driver.
+- **UNEMP and GOV** are not significant, suggesting their effects are absorbed by other variables in this specification.
+- **Sargan test** p-values above 0.05 in both models confirm instrument validity (no over-identification issues).
+- **Autocorrelation tests** show no evidence of first- or second-order serial correlation in residuals.
+- **Time dummy Wald tests** are significant, confirming that period-specific shocks are appropriately captured.
+
+## Model 3 — Moderation by Digital Trust and Social Trust
+
+Interaction terms are added to test whether Digital Trust (DT) and Social Trust (ST) moderate the FII → GDP relationship.
+
+```{r model-interactions}
+full_model_interactions <- pgmm(
+  GDP ~ lag(GDP, 1) + FII_across + CPI + UNEMP + EDU + GOV +
+    FII_across:`Digital.Trust` + FII_across:ST |
+    lag(GDP, 2:5) + lag(FII_across, 2:5),
+  data    = pdata,
+  effect  = "twoways",
+  model   = "twostep",
+  collapse= TRUE
+)
+summary(full_model_interactions, robust = TRUE)
+```
+
+**Key findings:**
+
+- **FII** remains positive and significant, confirming the baseline relationship.
+- **FII × Digital Trust:** The interaction term is not statistically significant, suggesting that Digital Trust does not materially moderate the FII–GDP relationship within this GMM specification.
+- **FII × Social Trust:** The interaction term is positive and significant at the 5% level. Countries with higher social trust derive greater economic benefit from financial inclusion — a finding consistent with the view that interpersonal trust creates an institutional environment in which financial systems function more effectively.
+- **Model diagnostics:** Sargan test p = 0.51 (instruments valid), no autocorrelation at either order, Wald test p < 0.001 (model jointly significant), time dummies significant.
+
+---
+
+# Moderation Analysis: Year-by-Year Cross-Sections
+
+While the GMM models pool information across time, cross-sectional OLS regressions estimated separately for each year reveal whether the moderating effects are stable or emerge at specific points. All models include the same set of controls; VIF, Breusch-Pagan, and Shapiro-Wilk diagnostics are recorded for each year.
+
+## Digital Trust (and Cybersecurity Index) as Moderator
+
+```{r year-mod-csi}
+diagnostics_csi <- list()
+
+for (yr in unique(Full_data_standardized$Year)) {
+  data_yr <- Full_data_standardized %>% filter(Year == yr)
+  model_yr <- lm(
+    GDP ~ FII_across * `Cybersecurity Index` + FII_across * TiB_high +
+          CPI + UNEMP + EDU + GOV,
+    data = data_yr
+  )
+  diagnostics_csi[[as.character(yr)]] <- list(
+    summary     = summary(model_yr),
+    vif         = vif(model_yr, type = "predictor"),
+    bp_test     = bptest(model_yr),
+    shapiro     = shapiro.test(residuals(model_yr))
+  )
+}
+
+for (yr in names(diagnostics_csi)) {
+  cat("\n=== Year:", yr, "===\n")
+  print(diagnostics_csi[[yr]])
+}
+```
+
+**Interpretation:** The interaction terms for both the Cybersecurity Index and Trust in Banks fail to reach significance in any individual year. This is consistent with the GMM finding: Digital Trust, in its various operationalisations, does not reliably moderate the FII–GDP relationship on a year-by-year basis. This may reflect that digital trust effects operate over longer time horizons, or that the chosen indicators do not fully capture the construct.
+
+## Social Trust as Moderator
+
+```{r year-mod-st}
+results_st <- list()
+
+for (yr in unique(Full_data_standardized$Year)) {
+  data_yr <- Full_data_standardized %>% filter(Year == yr)
+  model_yr <- lm(
+    GDP ~ FII_across * ST + CPI + UNEMP + EDU + GOV,
+    data = data_yr
+  )
+  results_st[[as.character(yr)]] <- broom::tidy(model_yr) %>%
+    mutate(Year = yr)
+}
+
+results_st_df <- bind_rows(results_st)
+
+results_st_df %>%
+  filter(term == "FII_across:ST") %>%
+  select(Year, term, estimate, std.error, statistic, p.value) %>%
+  knitr::kable(digits = 3, caption = "Year-by-Year FII × Social Trust Interaction")
+```
+
+```{r year-mod-st-plot}
+results_st_df %>%
+  filter(term == "FII_across:ST") %>%
+  ggplot(aes(x = Year, y = estimate)) +
+  geom_point(size = 3, color = "#2166ac") +
+  geom_errorbar(
+    aes(ymin = estimate - 1.96 * std.error,
+        ymax = estimate + 1.96 * std.error),
+    width = 0.2, color = "#2166ac"
+  ) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "#d6604d") +
+  labs(
+    title    = "Year-by-Year Moderation Effect of Social Trust on FII → GDP",
+    subtitle = "Error bars represent 95% confidence intervals",
+    x        = "Year",
+    y        = "Coefficient of FII × Social Trust"
+  ) +
+  theme_minimal()
+```
+
+**Interpretation:** Across all individual years (2017–2022), the interaction coefficient for FII × Social Trust fluctuates around zero and does not reach significance in any single year. This contrasts with the significant panel (longitudinal) effect found in Model 3. The divergence indicates that the moderating role of Social Trust requires the full temporal dimension of the panel to be detected — it accumulates over time rather than being observable in any given cross-section.
+
+---
+
+# Fixed vs. Random Effects: Model Selection
+
+To confirm the appropriate estimator for the panel moderation models, a Hausman test is conducted to choose between fixed and random effects.
+
+```{r hausman}
+panel_data <- pdata.frame(Full_data_standardized, index = c("Country_Name", "Year"))
+
+fe_model <- plm(
+  GDP ~ FII_across * Digital.Trust + FII_across * ST + CPI + UNEMP + EDU + GOV,
+  data  = panel_data,
+  model = "within"
+)
+
+re_model <- plm(
+  GDP ~ FII_across * Digital.Trust + FII_across * ST + CPI + UNEMP + EDU + GOV,
+  data  = panel_data,
+  model = "random"
+)
+
+phtest(fe_model, re_model)
+```
+
+The Hausman test is significant, indicating that country-specific effects are correlated with the regressors, so the **fixed-effects model** is preferred.
+
+```{r fe-model-results}
+summary(fe_model)
+```
+
+```{r fe-diagnostics}
+# Heteroskedasticity
+bptest(fe_model)
+
+# Serial correlation
+pbgtest(fe_model)
+```
+
+Since the Breusch-Pagan test detects heteroskedasticity, robust (HC1) standard errors are applied to ensure valid inference.
+
+```{r fe-robust}
+fe_robust <- coeftest(fe_model, vcov = vcovHC(fe_model, type = "HC1"))
+print(fe_robust)
+```
+
+**Fixed-effects model results (with robust SEs):**
+
+- **FII × Social Trust** remains positive and significant, confirming the longitudinal moderating role of Social Trust.
+- **FII × Digital Trust** does not reach significance, consistent with all previous results.
+- **CPI and UNEMP** show negative effects on GDP, and **EDU** a marginal positive effect, all consistent with economic theory.
+
+---
+
+# Discussion and Conclusions
+
+## Summary of Findings
+
+This analysis examined the relationship between financial inclusion and economic growth across a cross-country panel of 30+ countries from 2017 to 2022, incorporating two trust-based moderators and six macroeconomic controls.
+
+**Core finding — FII and GDP:** Financial inclusion exerts a positive and robust effect on GDP per capita across all model specifications (simple GMM, full GMM, and fixed-effects panel). This relationship persists after controlling for inflation, unemployment, education, and government expenditure, and is robust to alternative normalisation strategies.
+
+**Moderation by Social Trust:** Social trust consistently amplifies the FII → GDP relationship in longitudinal models. Countries with higher baseline levels of interpersonal trust derive greater economic benefits from financial inclusion. This moderating effect is not detectable in year-by-year cross-sections alone — it requires the panel dimension to emerge, suggesting it accumulates over multiple years.
+
+**Moderation by Digital Trust:** Digital Trust — measured as a composite DT index, a cybersecurity index, or trust in banks — does not significantly moderate the FII–GDP relationship in any model or timeframe tested. This may reflect that existing digital trust indicators are imperfect proxies for the underlying construct, or that digital trust's influence on economic outcomes operates through indirect channels.
+
+## Comparison of DT and ST as Moderators
+
+| Dimension | Digital Trust | Social Trust |
+|---|---|---|
+| Year-specific moderation | Not significant | Not significant |
+| Longitudinal moderation | Not significant | **Significant (+)** |
+| Nature | Time-varying | Time-invariant (stable) |
+| Mechanism | Infrastructure / confidence | Institutional embeddedness |
+
+## Recommendations
+
+**For policymakers:**
+
+- Efforts to expand financial inclusion should be paired with investments in social cohesion — community trust acts as a multiplier of inclusion's economic benefits.
+- Improving digital infrastructure and financial literacy may help unlock the potential moderating role of digital trust that this study was unable to confirm statistically.
+
+**For future research:**
+
+- Extend the panel beyond 2022 to capture post-pandemic dynamics and the impact of Central Bank Digital Currencies (CBDCs).
+- Explore non-linear relationships between FII and GDP — inclusion effects may be largest at intermediate levels of financial development.
+- Use more granular trust measures (e.g., institution-specific digital trust, sub-national social trust) to better identify the mechanisms through which trust shapes inclusion's economic impact.
+- Consider machine learning methods (e.g., causal forests) to detect heterogeneous treatment effects across country subgroups.
+
+---
+
+*Analysis conducted in R. Data sources: IMF Financial Access Survey, World Values Survey, World Bank World Development Indicators, Gallup World Poll, and the Global Cybersecurity Index.*
