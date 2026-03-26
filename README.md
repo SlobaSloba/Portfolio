@@ -59,4 +59,4 @@ It is a work in progress which I do in my spare time, but I will try to showcase
 Change history: \
 18/03/2026: Created repo, added Churn dataset simulation (Python) and exploration (Python + SQL) \
 25/03/2026: Added Econometrics notebook (Python) \
-26/03/2026: Added Instagram NLP analysis (R) and Financial Inclusion project
+26/03/2026: Added Instagram NLP analysis (R) and Financial Inclusion project (R) 
