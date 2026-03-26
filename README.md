@@ -7,7 +7,7 @@ It is a work in progress which I do in my spare time, but I will try to showcase
 ## Projects Overview
 
 ### Churn Dataset Simulation  
-[Open Notebook](./Churn%20dataset%20simulation.ipynb)
+[Open Notebook](./Churn%20dataset%20simulation.html)
 
 - Built a synthetic dataset (100K users) to simulate realistic churn behavior  
 - Engineered behavioral and subscription-based features to reflect real-world drivers  
@@ -17,7 +17,7 @@ It is a work in progress which I do in my spare time, but I will try to showcase
 ---
 
 ### SQL Analysis (DuckDB)  
-[Open Notebook](./SQL%20analysis.ipynb)
+[Open Notebook](./SQL%20analysis.html)
 
 - Analyzed relational data (users, subscriptions, activity logs) using DuckDB  
 - Wrote optimized SQL queries for joins, aggregations, and time-series analysis  
@@ -27,7 +27,7 @@ It is a work in progress which I do in my spare time, but I will try to showcase
 ---
 
 ### Econometrics: Homeownership Analysis  
-[Open Notebook](./Econometrics.ipynb)
+[Open Notebook](./Econometrics.html)
 
 - Modeled time-to-homeownership using survival analysis techniques  
 - Applied log-rank tests to compare demographic groups  
