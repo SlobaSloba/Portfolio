@@ -1,0 +1,440 @@
+---
+title: "Instagram influencer messaging - NLP"
+author: "Slobodan"
+date: "2026-03-25"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE,echo = TRUE)
+```
+
+### Introduction
+
+This project presents a natural language processing analysis of Instagram posts by sports influencers, with a particular focus on understanding how paid partnerships shape the language and content of such posts. The dataset consists of nearly 39,000 posts scraped from Instagram in January 2024, covering a wide range of sports influencers and their content.
+
+The central question driving the analysis is whether and how paid sponsored posts differ from organic, non-paid content — both in the words used and in the way audiences engage with them. To answer this, a series of complementary text analysis methods were applied. First, basic data exploration was conducted to identify the most common words in each type of post and to calculate tf-idf coefficients, which highlight words that are distinctively associated with paid versus non-paid content. This was followed by a sentiment analysis using the NRC lexicon, which allowed us to compare the emotional tone of the two types of posts and examine how different sentiments relate to audience engagement. Subsequently, a Latent Dirichlet Allocation (LDA) topic model was fitted to the full corpus in order to identify the dominant themes present across all posts. Finally, semantic network graphs were constructed separately for paid and unpaid posts, visualising which words tend to co-occur and how they cluster into thematically coherent communities.
+
+Together, these methods provide a comprehensive picture of how sports influencers communicate with their audiences, and how commercial partnerships shape that communication.
+
+
+## Setup and Data Cleaning
+
+First, we load the necessary libraries and process the raw data.
+
+```{r libraries_and_data}
+#libraries
+library(readxl)
+library(tidyverse)
+library(tidytext)
+library(topicmodels)
+library(scales)
+library(ldatuning)
+library(topicdoc)
+library(qdap)
+library(igraph)
+library(ggraph)
+library(widyr)
+
+#Loading in the data
+ig_1 <- read_excel("dataset_instagram-post-scraper_2024-01-16_18-32-27-231.xlsx")
+ig_2 <- read_excel("dataset_instagram-post-scraper_2024-01-17_15-41-02-197.xlsx")
+ig_3 <- read_excel("dataset_instagram-post-scraper_2024-01-18_08-16-37-666.xlsx")
+ig_4 <- read_excel("dataset_instagram-post-scraper_2024-01-18_11-32-22-142.xlsx")
+
+#Merging it into one dataset and attaching serial numbers
+ig <- bind_rows(ig_1, ig_2, ig_3, ig_4)
+sn <- (1:38801)
+ig <- bind_cols(sn, ig)
+ig <- ig %>%
+  rename("SN" = "...1")
+
+#Selecting out the captions and other potentially useful variables for tidying and subsequent analyses
+captions <- ig %>%
+  select(SN, caption, commentsCount, isSponsored, ownerUsername, paidPartnership)
+
+#tidying
+tidy_captions <- captions %>%
+  unnest_tokens(word, caption)
+
+data("stop_words")
+
+tidy_captions <- tidy_captions %>%
+  anti_join(stop_words)
+
+spanish <- read_csv("spanish.txt")
+tidy_captions <- tidy_captions %>%
+  anti_join(spanish)
+
+meaningless <- as.data.frame(c("i’m", "it’s", "I've", "can't"))
+colnames(meaningless) <- "word"
+
+tidy_captions <- tidy_captions %>%
+  anti_join(meaningless) %>%
+  filter(!grepl("[0-9]", word)) %>% 
+  mutate(paidPartnership = ifelse(is.na(paidPartnership), "false", paidPartnership))
+
+```
+
+## Results
+### Data Exploration
+
+In order to understand the collected dataset as well as possible, we have initially investigated general trends in it. We have found that there are clear differences, for instance, in the most common words used in posts which are posted as a paid sponsorships and those which are not. As the figure demonstrates, paid posts often contain the word (or hashtag) ad, and also mention links in bio, apps, as well as the „staywrogn“, which is a popular brand that sponsors sports influencers. There are also some more generic words such as „time“, „world“ and „collection“. On the other hand, in non-paid posts, we can see that there are many more generic words.
+
+
+```{r top_words}
+tidy_captions_top10 <- tidy_captions %>%
+  count(paidPartnership, word, sort = TRUE) %>%
+  group_by(paidPartnership) %>%
+  slice_max(order_by = n, n = 10) %>%
+  ungroup()%>%
+  mutate(.r = - row_number())
+
+tidy_captions_top10 %>%
+  ggplot(aes(.r, n, fill = factor(paidPartnership))) +
+  geom_col(show.legend = FALSE) +
+  scale_x_continuous(breaks = tidy_captions_top10$.r, labels = tidy_captions_top10$word) +
+  facet_wrap(~ paidPartnership, scales = "free", labeller = labeller(paidPartnership = c("false" = "Non-paid", "true" = "Paid"))) +
+  coord_flip() +
+  theme(axis.title.y=element_blank())  +
+  theme_minimal()
+```
+
+In order to further understand the specific words which appear only in one, but not in the other types of posts (paid vs. non-paid), tf-idf coefficients were calculated. As may be seen in the figure below, tf-idf is the highest for different brand names in the paid category. On the other hand, it seems that the fighting leagues of UFC and MMA are very rarely mentioned in paid posts, and that certain motivational hashtags are also rarely used in them as well. 
+
+```{r tf_idf}
+captions_words <- tidy_captions %>%
+  count(paidPartnership, word, sort = TRUE)
+
+captions_words %>%
+  bind_tf_idf(word, paidPartnership, n)%>%
+  group_by(paidPartnership)%>%
+  arrange(desc(tf_idf))%>%
+  slice_max(order_by = tf_idf, n = 10)%>%
+  mutate(word = reorder(word, tf_idf))%>%
+  ggplot(aes(word, tf_idf, fill = paidPartnership))+
+  geom_col(show.legend = FALSE)+
+  facet_wrap(~ paidPartnership, scales = "free", labeller = labeller(paidPartnership = c("false" = "Non-paid", "true" = "Paid")))+
+  coord_flip()+
+  theme(axis.title.y=element_blank())+
+  theme_minimal()
+```
+
+Another aspect of paid partnerships is engagement. As our data suggests, paid partnered posts reach an average of 12520 comments, while non-paid ones average 2327 comments. This is in contrast with the overwhelmingly larger number of non-paid posts in the dataset (190049), in comparison to paid ones (5161).
+
+```{r engagement}
+engagement <- captions %>%
+  filter(!is.na(commentsCount))%>%
+  mutate(paidPartnership = replace_na(paidPartnership, "false")) %>%
+  group_by(paidPartnership) %>%
+  summarize(m = mean(commentsCount),
+            n = n())
+
+engagement
+```
+
+### Sentiment Analysis
+
+A potential reason for the difference in engagement could be the sentiment that the posts use. In order to assess that, we first performed a sentiment analysis of the two types of posts. The sentiment analysis was done using the tidytext package and the NRC lexicon. Paid posts demonstrate slightly higher degrees of positive sentiment, anticipation, joy, and surprise. On the other hand, non-paid posts show higher degrees of negative sentiment, as well as sentiments of fear, anger, sadness and disgust. In total, it is clear that more positive sentiments are used in paid posts, likely in order to drive the engagement of the audience higher. 
+
+```{r sentiment_prep}
+sentiments <- get_sentiments("nrc")
+
+caption_sentiments <- tidy_captions %>%
+  inner_join(sentiments, relationship = "many-to-many")
+
+sentiment_n <- caption_sentiments%>%
+  group_by(paidPartnership)%>%
+  count(sentiment, sort = TRUE)%>%
+  ungroup()
+
+sentiment_n %>%
+  mutate(average = ifelse(row_number() <= 10, n / sum(n[1:10]), n / sum(n[11:20])))
+```
+
+Used sentiments in paid and non-paid posts also affect engagement. Paid posts are mainly evoking comments when using sentiments of disgust, surprise and sadness. On the other hand, non-paid posts are the most engaged with when they contain many words regarding joy, trust, and positivity. 
+
+```{r sentiment_engagement_graph}
+top_captions_engagement<-caption_sentiments%>%
+  group_by(paidPartnership)%>%
+  group_by(sentiment, .add = TRUE)%>%
+  summarize(m = mean(commentsCount))%>%
+  ungroup()%>%
+  arrange(m)%>%
+  mutate(.r = row_number())
+
+top_captions_engagement%>%
+  ggplot(aes(.r, m, fill = forcats::fct_rev(paidPartnership)))+
+  geom_col(show.legend = FALSE)+
+  scale_x_continuous(breaks = top_captions_engagement$.r, 
+                     labels = top_captions_engagement$sentiment)+
+  labs(y = "Number of comments")+
+  facet_wrap(~paidPartnership, scales = "free", labeller = labeller(paidPartnership = c("false" = "Non-paid", "true" = "Paid")))+
+  theme(axis.title.y=element_blank())+
+  coord_flip()+
+  theme_minimal()
+```
+
+We can further understand these differences if we take a look at the most common words used in expressing each of the sentiments in paid and non-paid posts. The words used to express different sentiments in the two types of posts are relatively similar, but there are some notable differences as well. For instance, negative-sentiment words in paid posts relate to advertisement-related terms, such as limited (likely edition or offer) and grab. Also, positive sentiment is expressed the most in the word join, which likely relates to joining clubs or users of some product. Words with the sentiment of disgust included weight and feeling bad in different ways, which is potentially a tactic the influencers use to show an opposite example to what the product they are advertising can bring them. The large engagement which results from excitement is in large due to word birthday, likely indicating adveritisng something as a good birthday gift. [cite: 35] All of the top five sadness-reflecting words in the paid category likely reflect sales as well, since they include bad feelings (that the products are potentially marketed as fixing), as well as weight, which may be a topic of struggle for many people.
+
+```{r top_sentiment_words, fig.height=10, fig.width=5}
+top_sentiments_unpaid <- caption_sentiments %>%
+  filter(paidPartnership == "false")%>%
+  group_by(sentiment)%>%
+  count(sentiment, word, sort = TRUE)%>%
+  slice_max(n, n = 5, with_ties = FALSE)%>%
+  ungroup()%>%
+  mutate(.r = -row_number())
+
+top_sentiments_paid <- caption_sentiments %>%
+  filter(paidPartnership == "true")%>%
+  group_by(sentiment)%>%
+  count(sentiment, word, sort = TRUE)%>%
+  slice_max(n, n = 5, with_ties = FALSE)%>%
+  ungroup()%>%
+  mutate(.r = -row_number())
+
+top_sentiments_paid %>%
+  group_by(sentiment)%>%
+  ggplot(aes(.r, n, fill = sentiment))+
+  scale_x_continuous(breaks = top_sentiments_paid$.r, labels = top_sentiments_paid$word)+
+  geom_col(show.legend = FALSE)+
+  facet_wrap(~ sentiment,nrow = 5, scales = "free") +
+  theme(axis.title.y=element_blank())+  
+  labs(title = "Paid posts")+
+  coord_flip()+
+  theme_minimal()
+
+top_sentiments_unpaid %>%
+  group_by(sentiment)%>%
+  ggplot(aes(.r, n, fill = sentiment))+
+  scale_x_continuous(breaks = top_sentiments_unpaid$.r, labels = top_sentiments_unpaid$word)+
+  geom_col(show.legend = FALSE)+
+  facet_wrap(~ sentiment,nrow = 5, scales = "free") +
+  theme(axis.title.y=element_blank())+  
+  labs(title = "Non-paid posts")+
+  coord_flip()+
+  theme_minimal()
+```
+
+### Latent Dirichlet Allocation (LDA)
+
+After the sentiment analysis, we conducted a latent Dirichlet allocation analysis in order to determine the dominant topics that can be detected in the comments corpus. This was done using the topicmodels package. The first important consideration in LDA modelling is choosing the number of topics. In line with literature recommendations, we chose a model with the number of topics that fits best within multiple criteria, as implemented in the ldatuning package. Each of the criteria attempts to find the optimal number of topics by utilizing different metrics, such as maximizing information divergence between pairs of topics, minimizing the salient distributions derived from matrix factors, minimizing the cosine distance of topics or maximizing the Bayes likelihood of the data given the model. The numerical criteria results may be seen in the figure below, but we also considered interpretability of the topics when assessing which model to choose. 
+
+```{r lda_tuning}
+lda_prep <- tidy_captions %>%
+  count(SN, word)%>%
+  filter(!is.na(word))
+
+captions_dtm <- cast_dtm(lda_prep, document = SN, term = word, value = n)
+
+result <- FindTopicsNumber(
+  captions_dtm,
+  topics = seq(from = 2, to = 15, by = 1),
+  metrics = c("Griffiths2004", "CaoJuan2009", "Arun2010", "Deveaud2014"),
+  method = "Gibbs",
+  control = list(seed = 1234),
+  mc.cores = 15,
+  verbose = TRUE
+)
+
+FindTopicsNumber_plot(result)
+```
+
+The different metrics indicate different optimal numbers of topics. Additional analyses were conducted in order to determine the perplexity and coherence of the different models. As may be seen in the  figure below, perplexity lowers with the number of topics. Extended analyses indicated that this metric has the bottom point at >50 topics, which would be unreasonable from a standpoint of interpretation. It may be noted that there are reductions in the speed of lowering of perplexity at 3, 5, and 10 topics marks. 
+
+```{r lda_perplexity}
+dtm = captions_dtm
+train = sample(rownames(dtm), nrow(dtm) * .75)
+dtm_train = dtm[rownames(dtm) %in% train, ]
+dtm_test = dtm[!rownames(dtm) %in% train, ]
+
+p = data.frame(k = c(2,4,6,8,10,12,14), perplexity = NA)
+
+for (i in 1:nrow(p)) {
+  m = LDA(dtm_train, method = "Gibbs", k = p$k[i],  control = list(seed = 1234))
+  p$perplexity[i] = perplexity(m, dtm_test)
+}
+
+ggplot(p, aes(x=k, y=perplexity)) + 
+  geom_line()+
+  labs(x = "N of topics", y = "Perplexity")
+```
+
+Furthermore, we explored the coherence of the topics, which may be seen as a measure of semantic similarity within a topic. Average coherence of a model’s topics should be as high as possible. The highest coherence was achieved for the model with four topics. In order to determine which would be the most sensible in term of interpretation, we have listed the most salient 5 words for each of the topics in models between 2 and 10 topics. This detailed representation may be found in supplemental materials. We chose 10 as the maximum number of topics, as that seems to be the optimum for the Cao Juan et al. (2009) criterion, as well as a good trade-off in terms of the other metrics 
+
+```{r lda_coherence}
+captions_lda2 <- LDA(captions_dtm, k = 2, control = list(seed = 1234))
+captions_lda3 <- LDA(captions_dtm, k = 3, control = list(seed = 1234))
+captions_lda4 <- LDA(captions_dtm, k = 4, control = list(seed = 1234))
+captions_lda5 <- LDA(captions_dtm, k = 5, control = list(seed = 1234))
+captions_lda6 <- LDA(captions_dtm, k = 6, control = list(seed = 1234))
+captions_lda7 <- LDA(captions_dtm, k = 7, control = list(seed = 1234))
+captions_lda8 <- LDA(captions_dtm, k = 8, control = list(seed = 1234))
+captions_lda9 <- LDA(captions_dtm, k = 9, control = list(seed = 1234))
+captions_lda10 <- LDA(captions_dtm, k = 10, control = list(seed = 1234))
+
+coherence2 <- mean(topic_coherence(captions_lda2, captions_dtm))
+coherence3 <- mean(topic_coherence(captions_lda3, captions_dtm))
+coherence4 <- mean(topic_coherence(captions_lda4, captions_dtm))
+coherence5 <- mean(topic_coherence(captions_lda5, captions_dtm))
+coherence6 <- mean(topic_coherence(captions_lda6, captions_dtm))
+coherence7 <- mean(topic_coherence(captions_lda7, captions_dtm))
+coherence8 <- mean(topic_coherence(captions_lda8, captions_dtm))
+coherence9 <- mean(topic_coherence(captions_lda9, captions_dtm))
+coherence10 <- mean(topic_coherence(captions_lda10, captions_dtm))
+
+coherences <- as.data.frame(matrix(c(coherence2, coherence3, coherence4, 
+                       coherence5, coherence6, coherence7,
+                       coherence8, coherence9, coherence10)))
+
+coherences <- coherences%>%
+  mutate(N_of_topics = 2:10)%>%
+  mutate(Coherence = V1)
+
+coherences%>%
+  ggplot(aes(x = N_of_topics, y = Coherence))+
+  geom_line()+
+  labs(x = "Number of topics")
+```
+
+The model with 10 topics was chosen in the end due to these reasons.It also achieved solid perplexity and the function for perplexity notable slowed down after this point. While its coherence was lower than most, it was possible to make sensible interpretations based on the top 10 words of the topics. We have outlined the 10 most salient words for each of the topics in the model with 10 topics, which is the one that we chose in the end. 
+
+Based on the most salient words, the topics were given the following titles and interpretations: [cite: 65]
+* **Topic 1: Johnny Walker and UFC** - This topic seems to be related to the UFC, and the fighter Johnny Walker specifically. It also covers a lot of ads for the brand Boohooman. 
+* **Topic 2: Love and Happiness** - This topic revolves around positive emotions, celebrations, and expressions of love and happiness.
+* **Topic 3: Social Media Engagement** - This topic appears to involve social media engagement, encouraging followers to win and support through bio links, likely presenting them with ads towards products (“collection”) that the poster is selling. 
+* **Topic 4: Fitness and Training** - This topic is likely related to fitness and training, potentially also advertising programs that followers can find in one’s bio.
+* **Topic 5: Challenges in Life** - This topic seems to touch upon challenges in life, emphasizing the difficulty of certain days and experiences.
+* **Topic 6: Holiday and Special Occasions** - This topic revolves around holiday and special occasions, mentioning Christmas and encouraging activities like calisthenics and ads for two brands (yamamotonutrition and stayme7o). It is possible that these products were more heavily advertised during the holiday season.
+* **Topic 7: MMA and Combat Sports** - This topic is centered around MMA (Mixed Martial Arts) and different combat sports, mentioning UFC, MMA, boxing, Brazilian ju-jitsu, and wrestling. 
+* **Topic 8: Gaming and Entertainment** - This topic is likely related to gaming and entertainment, mentioning terms like game, play, and season, and possibly encouraging followers to play advertised video games. 
+* **Topic 9: YouTube and Podcast Content** - This topic is associated with online video and audio content, possibly on platforms like YouTube, which the creator is likely promoting through Instagram to reach wider audiences.
+* **Topic 10: Fitness Motivation and Training** - This topic revolves around fitness motivation and training, featuring keywords related to workouts and strength training. It also includes promotion of 1stphorm, a nutrition brand.
+
+In general, it may be seen that the topics cover a wide variety of ways in which influencers contact with their audiences. Some topics, like 2, 5, and 7 may simply be ways in which the content creators correspond with their audience and send messages that are relevant in their lives.  On the other hand, many of the other topics included advertisement in one way or another. They seemingly used various tactics for these advertisements, including attempting to motivate followers to work out or embrace a healthier lifestyle (4, 10), promoting video games as a fun activity (8), promoting content that they post their other social media platforms (3, 9), or promoting products while talking about other topics that are seemingly unrelated (1, 6). In any case, more topics included advertisement than those which did not.
+
+```{r lda_results, fig.height=10, fig.width=5}
+topic_10 <- tidy(captions_lda10, matrix = "beta")
+
+top_terms_10_ <- topic_10 %>%
+  group_by(topic) %>%
+  top_n(10, beta) %>%
+  ungroup() %>%
+  arrange(topic, -beta)%>%
+  mutate(.r = - row_number())
+
+top_terms_10_ %>%
+  ggplot(aes(.r, beta, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, nrow = 5, scales = "free") +
+  scale_x_continuous(breaks = top_terms_10_$.r, labels = top_terms_10_$term)+
+  theme(axis.title.y=element_blank())+
+  coord_flip()
+```
+
+### Semantic Networks
+
+Finally, we also created semantic network graphs of top words used together in paid and unpaid posts. For this, the igraph package was used. For paid posts, we used only words which occurred at least 15 times in the posts, and for the unpaid posts, we used those which occurred at least 500 times. This was chosen due to readability and interpretability of the graphs.
+
+Paid posts cluster around a core of shared promotional language, such as ad, join, head, hit, win, and experience — words typical of call-to-action driven sponsored content. On the edges of the graph are words specific to certain ads or types of ads, such as brand names (mindthegum, gkelite, myntra, oceanbeverages) and names of the most popular players (Messi, Zlatan). The Messi-related cluster is notably distinct, grouping themessistore, themessistore.com, messi, and store into its own community, reflecting a specific and recurring commercial partnership.
+
+```{r paid_network}
+paid_captions <- tidy_captions %>%
+  filter(paidPartnership == "true") %>%
+  group_by(word) %>%
+  mutate(N = n()) %>%
+  ungroup()%>%
+  filter(N > 15)%>%
+  filter(!is.na(word))
+
+edge_list <- paid_captions %>%
+  pairwise_count(word, SN, sort = TRUE)%>%
+  filter(n>7)
+
+graph <- graph_from_data_frame(edge_list, directed = FALSE)
+
+V(graph)$degree <- degree(graph)
+V(graph)$community <- as.character(cluster_louvain(graph)$membership)
+
+ggraph(graph, layout = "fr") +
+  geom_edge_link(aes(edge_alpha = n, edge_width = n), 
+                 color = "gray70", show.legend = FALSE) +
+  scale_edge_width(range = c(0.2, 1.5)) +
+  scale_edge_alpha(range = c(0.1, 0.6)) +
+  geom_node_point(aes(size = degree, color = community), show.legend = FALSE) +
+  scale_size(range = c(2, 10)) +
+  geom_node_text(aes(label = name, size = degree), 
+                 repel = TRUE, show.legend = FALSE,
+                 fontface = "bold", family = "sans") +
+  scale_size(range = c(2.5, 5)) +
+  theme_graph(base_family = "sans") +
+  labs(title = "Paid Partnership Caption Network",
+       subtitle = "Node size & label size = connection strength | Color = community") +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    plot.subtitle = element_text(size = 9, color = "gray50")
+  )
+```
+
+Unpaid posts show a denser, more interconnected network compared to paid posts, with three distinct communities emerging. A green cluster in the upper left groups fitness and sports-related words such as fitness, training, workout, strengthtraining, fitnessmotivation, ufc, mma, and fight, reflecting a strong theme of athletic content. A red cluster on the right contains call-to-action and media words like bio, link, watch, youtube, click, free, and episode, suggesting content that directs followers to external platforms. A large blue cluster in the centre and lower portion of the graph contains more personal and general language — love, life, family, day, happy, birthday, and world — representing everyday, non-promotional content. Central hub words such as link, bio, video, and people bridge multiple communities, suggesting they appear across all types of unpaid posts regardless of theme.
+
+```{r unpaid_network}
+unpaid_captions <- tidy_captions %>%
+  filter(paidPartnership == "false") %>%
+  group_by(word) %>%
+  mutate(N = n()) %>%
+  ungroup()%>%
+  filter(N > 500)%>%
+  filter(!is.na(word))
+
+edge_list_unpaid <- unpaid_captions %>%
+  widyr::pairwise_count(word, SN, sort = TRUE) %>%
+  filter(n > 100)
+
+graph_unpaid <- graph_from_data_frame(edge_list_unpaid, directed = FALSE)
+
+V(graph_unpaid)$degree <- degree(graph_unpaid)
+V(graph_unpaid)$community <- as.character(cluster_louvain(graph_unpaid)$membership)
+
+ggraph(graph_unpaid, layout = "fr") +
+  geom_edge_link(aes(edge_alpha = n, edge_width = n), 
+                 color = "gray70", show.legend = FALSE) +
+  scale_edge_width(range = c(0.2, 1.5)) +
+  scale_edge_alpha(range = c(0.1, 0.6)) +
+  geom_node_point(aes(size = degree, color = community), show.legend = FALSE) +
+  scale_size(range = c(2, 10)) +
+  geom_node_text(aes(label = name, size = degree), 
+                 repel = TRUE, show.legend = FALSE,
+                 fontface = "bold", family = "sans") +
+  scale_size(range = c(2.5, 5)) +
+  theme_graph(base_family = "sans") +
+  labs(title = "Unpaid Caption Network",
+       subtitle = "Node size & label size = connection strength | Color = community") +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    plot.subtitle = element_text(size = 9, color = "gray50")
+  )
+
+```
+
+### Summary and Skills Demonstrated
+
+This project analyzed a corpus of nearly 39,000 Instagram posts from sports 
+influencers to understand how paid partnerships shape the language, sentiment, 
+and topics that content creators use when communicating with their audiences. 
+The analysis revealed that paid posts are more positive in tone, generate 
+significantly higher engagement, and cluster around brand promotion and lifestyle 
+aspiration, while non-paid posts reflect more authentic audience interaction 
+around sports events and personal motivation.
+
+The project demonstrates proficiency in:
+
+- **Data wrangling and text preprocessing** with `tidyverse` and `tidytext`
+- **Sentiment analysis** using the NRC lexicon
+- **Topic modeling** with LDA, including principled model selection via multiple quantitative criteria
+- **tf-idf weighting** for comparative corpus analysis
+- **Network visualization** with `igraph`
+
+Together these methods illustrate how computational text analysis can surface 
+meaningful patterns in large-scale social media data.
