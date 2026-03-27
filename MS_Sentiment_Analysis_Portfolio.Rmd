@@ -1,0 +1,775 @@
+---
+title: "Morgan Stanley Employee Sentiment Analysis"
+subtitle: "Web Scraping & NLP with Glassdoor and Indeed Reviews"
+author: "Slobodan"
+date: "Original: 01.09.2024., edited for portfolio: 27.03.2026."
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    theme: flatly
+    highlight: tango
+    code_folding: show
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  eval = TRUE,
+  fig.align = "center",
+  fig.width = 8,
+  fig.height = 6
+)
+```
+
+---
+
+## Overview
+
+This project explores employee sentiment at **Morgan Stanley** using reviews scraped from **Glassdoor** and **Indeed**. The full pipeline covers:
+
+1. **Web scraping** both platforms via the Scrapfly API
+2. **Data wrangling** - cleaning, combining, and tokenising the reviews
+3. **Sentiment analysis** using three NLP lexicons (NRC, Bing, and AFINN)
+4. **Temporal analysis** - tracking how sentiment has shifted across four time periods (Pre-COVID, Post-COVID, 7–12 months ago, and the Last 6 months (February 2024 - September 2024)
+
+The analysis focuses on **former employees**, whose reviews tend to be more candid.
+
+---
+
+## Part 1 - Glassdoor Scraper
+
+### Libraries & API Configuration
+
+The scraper relies on [`crul`](https://docs.ropensci.org/crul/) for HTTP requests and routes them through the [Scrapfly](https://scrapfly.io/) proxy API to bypass anti-scraping protections.
+
+```{r glassdoor-libs, eval=FALSE}
+library(crul)
+library(stringr)
+library(jsonlite)
+library(dplyr)
+library(parallel)
+
+SCRAPFLY_KEY <- ""
+```
+
+### Scrapfly Helper Function
+
+This helper builds the proxied request URL. It supports JavaScript rendering, country-level proxy selection, and anti-scraping protection (`asp = TRUE`).
+
+```{r glassdoor-helper, eval=FALSE}
+scrapfly <- function(url,
+                     render_js       = FALSE,
+                     wait_for_selector = NULL,
+                     asp             = FALSE,
+                     country         = "us",
+                     proxy_pool      = "public_datacenter_pool") {
+  url_build("https://api.scrapfly.io/scrape", query = list(
+    key               = SCRAPFLY_KEY,
+    url               = url,
+    asp               = "true",
+    render_js         = if (render_js) "true" else "false",
+    wait_for_selector = wait_for_selector,
+    country           = country,
+    proxy_pool        = proxy_pool
+  ))
+}
+```
+
+### Single-Page Scraper
+
+Each Glassdoor review page is scraped individually. The function parses the JSON response and extracts review fields using regex. It retries up to 5 times on failure and adds a short delay between attempts.
+
+```{r glassdoor-single, eval=FALSE}
+scrape_single_page <- function(url) {
+  retry  <- 1
+  success <- FALSE
+  reviews_df <- data.frame()
+
+  while (!success && retry <= 5) {
+    tryCatch({
+      response     <- HttpClient$new(scrapfly(url))$get()
+      data         <- jsonlite::fromJSON(response$parse())
+      html_string  <- data$result$content
+      cleaned_content <- gsub("\n", "", html_string)
+
+      # Initialise storage vectors
+      dates <- current <- urls <- titles <- pros <- cons <- vector("character", 0)
+
+      # Split on review boundaries and drop trailing element
+      reviews <- strsplit(cleaned_content, ',"summaryOriginal":', fixed = TRUE)[[1]]
+      reviews <- reviews[-length(reviews)]
+
+      # Extract fields with regex
+      full    <- reviews
+      dates   <- str_match(reviews, '"reviewDateTime":"(.*?)"')[, 2]
+      current <- str_match(reviews, '"isCurrentJob":(true|false)')[, 2]
+      urls    <- str_match(reviews, '"reviewId":(\\d+)')[, 2]
+      titles  <- str_match(reviews, '"summary":"(.*?)"')[, 2]
+      pros    <- str_match(reviews, '"pros":"(.*?)"')[, 2]
+      cons    <- str_match(reviews, '"cons":"(.*?)"')[, 2]
+
+      reviews_df <- data.frame(
+        Full_review        = full,
+        Date               = dates,
+        IsCurrentEmployee  = current,
+        URL                = urls,
+        Title              = titles,
+        Pros               = pros,
+        Cons               = cons,
+        stringsAsFactors   = FALSE
+      )
+
+      # Append reviewer position
+      positions <- str_match_all(
+        cleaned_content,
+        '"author":\\{"@type":"Person","name":"(.*?)"\\}'
+      )[[1]][, 2]
+      reviews_df$Position <- positions
+
+      success <- TRUE
+
+    }, error = function(e) {
+      cat("Error on page - retrying (attempt", retry, "of 5)\n")
+      retry <<- retry + 1
+      Sys.sleep(5)
+    })
+  }
+
+  if (!success) cat("Failed after 5 attempts. Skipping page...\n")
+  return(reviews_df)
+}
+```
+
+### Multi-Page Scraper
+
+Pages are scraped sequentially, with progress auto-saved every 30 pages as `.rds` checkpoints to protect against interruptions.
+
+```{r glassdoor-multi, eval=FALSE}
+scrape_all_pages <- function(base_url, max_pages, save_interval = 30) {
+  all_reviews <- data.frame()
+
+  for (i in 1:max_pages) {
+    url <- if (i == 1) {
+      base_url
+    } else {
+      gsub("_IP1", paste0("_IP", i), base_url)
+    }
+
+    cat("Scraping page", i, "of", max_pages, "...\n")
+    page_reviews <- scrape_single_page(url)
+    all_reviews  <- rbind(all_reviews, page_reviews)
+
+    if (i %% save_interval == 0 || i == max_pages) {
+      save_file <- paste0("glassdoor_reviews_page_", i, ".rds")
+      saveRDS(all_reviews, file = save_file)
+      cat("Saved progress at page", i, "→", save_file, "\n")
+    }
+
+    Sys.sleep(2)
+  }
+
+  cat("Scraping complete. Last page:", i, "\n")
+  return(all_reviews)
+}
+```
+
+### Execution & Export
+
+```{r glassdoor-run, eval=FALSE}
+base_url <- paste0(
+  "https://www.glassdoor.com/Reviews/",
+  "Morgan-Stanley-US-Reviews-EI_IE2282.0,14_IL.15,17_IN1_IP1.htm",
+  "?filter.iso3Language=eng",
+  "&filter.employmentStatus=REGULAR",
+  "&filter.employmentStatus=PART_TIME"
+)
+max_pages <- 616
+
+all_reviews_df <- scrape_all_pages(base_url, max_pages)
+
+# Drop the raw Full_review column before export
+reviews_no_full <- all_reviews_df[-1]
+write.csv(reviews_no_full, "Glassdoor Morgan Stanley reviews.csv", row.names = FALSE)
+```
+
+---
+
+## Part 2 - Indeed Scraper
+
+
+> The `scrapfly()` helper is identical to the one defined in Part 1.
+
+```{r indeed-helper, eval=FALSE}
+scrapfly <- function(url,
+                     render_js         = FALSE,
+                     wait_for_selector = NULL,
+                     asp               = FALSE,
+                     country           = "us",
+                     proxy_pool        = "public_datacenter_pool") {
+  url_build("https://api.scrapfly.io/scrape", query = list(
+    key               = SCRAPFLY_KEY,
+    url               = url,
+    asp               = "true",
+    render_js         = if (render_js) "true" else "false",
+    wait_for_selector = wait_for_selector,
+    country           = country,
+    proxy_pool        = proxy_pool
+  ))
+}
+```
+
+### Page Parser
+
+Indeed embeds review data as JSON within the HTML. The parser isolates the `reviewsList` block by finding its start and end markers before extracting individual fields.
+
+```{r indeed-parser, eval=FALSE}
+get_review_page <- function(url) {
+  response    <- HttpClient$new(scrapfly(url))$get()
+  data        <- jsonlite::fromJSON(response$parse())
+  html_string <- data$result$content
+
+  # Isolate the reviews JSON block
+  start_marker <- '"reviewsList":'
+  end_marker   <- '"paginationLinks":'
+  start_pos    <- regexpr(start_marker, html_string)
+  end_pos      <- regexpr(end_marker,   html_string)
+
+  reviews_section <- if (start_pos != -1 & end_pos != -1) {
+    substr(html_string, start_pos, end_pos)
+  } else {
+    NA
+  }
+
+  # Extract each field
+  positions <- str_match_all(reviews_section, '"jobTitle":"(.*?)",' )[[1]][, 2]
+  positions <- positions[positions != ""]
+  dates     <- str_match_all(reviews_section, '"submissionDate":"(.*?)"')[[1]][, 2]
+  urls      <- str_match_all(reviews_section, '"reviewUrl":"(.*?)"')[[1]][, 2]
+  reviews   <- str_match_all(reviews_section, '"text":\\{"text":"(.*?)"\\}')[[1]][, 2]
+  titles    <- str_match_all(reviews_section, '"title":\\{"text":"(.*?)"\\}')[[1]][, 2]
+  current   <- str_match_all(reviews_section, '"currentEmployee":(true|false)')[[1]][, 2]
+  location  <- str_match_all(reviews_section, '"location":"(.*?)"')[[1]][, 2]
+
+  data.frame(
+    Full_page        = reviews_section,
+    Date             = dates,
+    Position         = positions,
+    Current_employee = current,
+    URL              = urls,
+    Title            = titles,
+    Review           = reviews,
+    Location         = location,
+    stringsAsFactors = FALSE
+  )
+}
+```
+
+### Execution & Export
+
+Indeed paginates in steps of 20. Page 0 is scraped first, followed by pages 20–400 in a loop.
+
+```{r indeed-run, eval=FALSE}
+all_reviews <- data.frame(
+  Full_page        = character(),
+  Date             = character(),
+  Position         = character(),
+  Current_employee = character(),
+  URL              = character(),
+  Title            = character(),
+  Review           = character(),
+  Location         = character(),
+  stringsAsFactors = FALSE
+)
+
+# First page (offset 0)
+url          <- paste0('https://www.indeed.com/cmp/Mckinsey-&-Company/reviews?start=0&lang=en')
+page_reviews <- get_review_page(url)
+all_reviews  <- bind_rows(all_reviews, page_reviews)
+
+# Remaining pages
+for (i in seq(20, 400, by = 20)) {
+  url          <- paste0('https://www.indeed.com/cmp/Mckinsey-&-Company/reviews?start=', i, '&lang=en')
+  cat("Scraping offset:", i, "\n")
+  page_reviews <- get_review_page(url)
+  all_reviews  <- bind_rows(all_reviews, page_reviews)
+  Sys.sleep(1)
+}
+
+write.csv(all_reviews, "Indeed_reviews.csv", row.names = FALSE)
+```
+
+---
+
+## Part 3 - Sentiment Analysis
+
+### Libraries
+
+```{r sa-libs}
+library(tidyverse)
+library(readr)
+library(tidytext)
+library(forcats)
+```
+
+### Load & Prepare Data
+
+The two datasets are loaded, harmonised to a shared column schema, and merged into a single dataframe.
+
+```{r sa-load, eval=TRUE}
+Glassdoor <- read_csv("Glassdoor Morgan Stanley reviews.csv")
+Indeed    <- read_csv("Indeed Morgan Stanley reviews.csv")
+```
+
+```{r sa-wrangle, eval=TRUE}
+# Glassdoor
+Glassdoor <- Glassdoor %>%
+  mutate(Review = paste(Pros, Cons, sep = " ")) %>%   # combine Pros + Cons into one Review field
+  rename(Current_employee = IsCurrentEmployee) %>%
+  mutate(
+    Date     = ymd_hms(Date),
+    Platform = "Glassdoor"
+  ) %>%
+  rename(ID = ...1)
+
+# Indeed
+Indeed <- Indeed %>%
+  mutate(
+    Date     = mdy(Date),
+    Platform = "Indeed"
+  ) %>%
+  rename(ID = ...1)
+
+# Combined
+common_columns <- c("ID", "Title", "Position", "Current_employee", "Date", "Review", "Platform")
+
+reviews <- bind_rows(
+  Glassdoor %>% select(all_of(common_columns)),
+  Indeed    %>% select(all_of(common_columns))
+)
+
+write.csv(reviews, "Glassdoor+Indeed.csv", row.names = FALSE)
+```
+
+### Tokenisation & Stop-Word Removal
+
+```{r sa-tokenise, eval=TRUE}
+tidy_reviews <- reviews %>%
+  unnest_tokens(word, Review)
+
+data("stop_words")
+
+tidy_reviews <- tidy_reviews %>%
+  anti_join(stop_words)
+```
+
+### Time Segmentation
+
+Reviews are grouped into four meaningful periods relative to the analysis date.
+
+```{r sa-time, eval=TRUE}
+tidy_reviews <- tidy_reviews %>%
+  mutate(
+    time_segment = case_when(
+      Date < as.Date("2020-06-01")                                     ~ "Pre-COVID",
+      Date >= as.Date("2020-06-01") & Date < as.Date("2023-09-01")      ~ "Post-COVID to 12+ months ago (September 2023)",
+      Date >= as.Date("2023-09-01")  & Date <as.Date("2024-02-01")        ~ "6-12 months ago (September 2023 - February 2024)",
+      Date >= as.Date("2024-02-01")                                       ~ "Last 6 months (February 2024 - September 2024)",
+      TRUE ~ NA_character_
+    ),
+    time_segment = factor(
+      time_segment,
+      levels = c("Last 6 months (February 2024 - September 2024)", "6-12 months ago (September 2023 - February 2024)", "Post-COVID to 12+ months ago (September 2023)", "Pre-COVID")
+    )
+  )
+```
+
+### Load Sentiment Lexicons
+
+Three complementary lexicons are used to capture different dimensions of sentiment:
+
+| Lexicon | What it measures |
+|---------|-----------------|
+| **NRC** | 8 discrete emotions + positive/negative |
+| **Bing** | Binary positive vs. negative |
+| **AFINN** | Numeric score from −5 (most negative) to +5 (most positive) |
+
+```{r sa-lexicons, eval=TRUE}
+sentiments         <- get_sentiments("nrc")
+sentiments_PN      <- get_sentiments("bing")
+sentiments_numeric <- get_sentiments("afinn")
+```
+
+### Join Reviews with Sentiments
+
+```{r sa-join, eval=TRUE}
+review_sentiments         <- tidy_reviews %>% inner_join(sentiments,         relationship = "many-to-many")
+review_sentiments_PN      <- tidy_reviews %>% inner_join(sentiments_PN,      relationship = "many-to-many")
+review_sentiments_numeric <- tidy_reviews %>% inner_join(sentiments_numeric, relationship = "many-to-many")
+
+# Categorise AFINN scores into three buckets
+review_sentiments_numeric <- review_sentiments_numeric %>%
+  mutate(
+    sentiment_category = case_when(
+      value >= -5 & value <= -2 ~ "Negative",
+      value >= -1 & value <= 1  ~ "Neutral",
+      value >= 2  & value <= 5  ~ "Positive"
+    )
+  )
+```
+
+---
+
+### Overall Sentiment Distribution (NRC)
+
+```{r sa-nrc-overall, eval=TRUE}
+sentiment_n <- review_sentiments %>%
+  filter(Current_employee == FALSE) %>%
+  count(sentiment, sort = TRUE) %>%
+  ungroup()
+
+sentiment_n
+```
+
+**Key finding:** Across both platforms, the dominant emotion is *positive*, followed by *trust* and *anticipation* - consistent with Morgan Stanley's strong employer brand. Negative emotions (fear, anger, disgust) are present but in the minority.
+
+The tables below show the full NRC emotion counts for each platform (former employees only):
+
+**Indeed**
+
+| Sentiment    | Count  |
+|:-------------|-------:|
+| positive     | 9,701  |
+| trust        | 6,066  |
+| anticipation | 3,647  |
+| joy          | 2,535  |
+| negative     | 2,078  |
+| fear         |   995  |
+| surprise     |   910  |
+| sadness      |   884  |
+| anger        |   799  |
+| disgust      |   445  |
+
+**Glassdoor**
+
+| Sentiment    | Count  |
+|:-------------|-------:|
+| positive     | 5,245  |
+| trust        | 3,198  |
+| anticipation | 2,090  |
+| joy          | 1,522  |
+| negative     | 1,500  |
+| sadness      |   690  |
+| fear         |   679  |
+| anger        |   672  |
+| surprise     |   533  |
+| disgust      |   414  |
+
+Notably, the ordering of negative emotions differs between platforms: on Indeed, *fear* edges out *sadness*, while on Glassdoor the two are effectively tied - a subtle but consistent signal that Indeed reviewers frame dissatisfaction through job-security concerns, while Glassdoor reviewers lean more toward disappointment.
+
+---
+
+### Top Words per NRC Sentiment
+
+```{r sa-nrc-words, eval=TRUE}
+top_sentiments_former <- review_sentiments %>%
+  filter(Current_employee == FALSE) %>%
+  group_by(sentiment) %>%
+  count(sentiment, word, sort = TRUE) %>%
+  slice_max(n, n = 5, with_ties = FALSE) %>%
+  ungroup() %>%
+  mutate(.r = -row_number())
+
+top_sentiments_former %>%
+  ggplot(aes(.r, n, fill = sentiment)) +
+  scale_x_continuous(
+    breaks = top_sentiments_former$.r,
+    labels = top_sentiments_former$word
+  ) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ sentiment, nrow = 5, scales = "free") +
+  labs(title = "Former Employees - Top Words per NRC Sentiment") +
+  coord_flip() +
+  theme_minimal() +
+  theme(
+    panel.grid.major   = element_blank(),
+    panel.grid.minor   = element_blank(),
+    panel.grid.major.x = element_line(),
+    axis.title.y       = element_blank()
+  )
+
+#ggsave("Top words per sentiment.tiff", height = 10, width = 6, dpi = 700)
+```
+
+---
+
+### Positive vs. Negative (Bing)
+
+```{r sa-bing-overall, eval=TRUE}
+sentiment_n_PN <- review_sentiments_PN %>%
+  filter(Current_employee == FALSE) %>%
+  count(sentiment, sort = TRUE) %>%
+  ungroup()
+
+sentiment_n_PN
+```
+
+```{r sa-bing-words, eval=TRUE}
+top_sentiments_former_PN <- review_sentiments_PN %>%
+  filter(Current_employee == FALSE) %>%
+  group_by(sentiment) %>%
+  count(sentiment, word, sort = TRUE) %>%
+  slice_max(n, n = 5, with_ties = FALSE) %>%
+  ungroup() %>%
+  mutate(.r = -row_number())
+
+top_sentiments_former_PN %>%
+  ggplot(aes(.r, n, fill = sentiment)) +
+  scale_x_continuous(
+    breaks = top_sentiments_former_PN$.r,
+    labels = top_sentiments_former_PN$word
+  ) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ sentiment, nrow = 5, scales = "free") +
+  labs(title = "Former Employees - Top Words: Positive vs. Negative (Bing)") +
+  coord_flip() +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.title.y     = element_blank()
+  )
+
+#ggsave("Negative vs positive top words per sentiment.tiff", height = 10, width = 6, dpi = 700)
+```
+
+**Key finding:** The binary Bing lexicon confirms the NRC picture. On **Indeed**, positive words outnumber negative ones by more than 2:1 - **5,200 positive** vs. **2,345 negative**. On **Glassdoor** the margin is narrower but still clearly positive: **2,917 positive** vs. **1,824 negative**. The top positive drivers across both platforms cluster around words like *opportunity*, *professional*, and *smart*, while the top negative words centre on *hard* (often ambiguous - reflecting workload rather than purely pejorative use), *competitive*, and *bureaucratic*.
+
+---
+
+### Negative / Neutral / Positive (AFINN)
+
+```{r sa-afinn-overall, eval=TRUE}
+sentiment_n_numeric <- review_sentiments_numeric %>%
+  filter(Current_employee == FALSE) %>%
+  count(sentiment_category, sort = TRUE) %>%
+  ungroup()
+
+sentiment_n_numeric
+```
+
+```{r sa-afinn-words, eval=TRUE}
+top_words_afinn <- review_sentiments_numeric %>%
+  filter(!is.na(sentiment_category)) %>%
+  group_by(sentiment_category) %>%
+  count(sentiment_category, word, sort = TRUE) %>%
+  slice_max(n, n = 5, with_ties = FALSE) %>%
+  ungroup() %>%
+  mutate(.r = -row_number())
+
+top_words_afinn %>%
+  ggplot(aes(.r, n, fill = sentiment_category)) +
+  scale_x_continuous(
+    breaks = top_words_afinn$.r,
+    labels = top_words_afinn$word
+  ) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ sentiment_category, nrow = 3, scales = "free") +
+  labs(title = "Former Employees - Top Words by AFINN Category") +
+  coord_flip() +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.title.y     = element_blank()
+  )
+
+#ggsave("Pos-neut-neg top words per sentiment.tiff", height = 10, width = 6, dpi = 700)
+```
+
+**Key finding:** AFINN's three-way split adds resolution that Bing's binary categorisation misses. On **Indeed**, **4,076** tokens score as positive, **1,726** as neutral, and only **912** as negative - a healthy positive skew. **Glassdoor** shows the same ordering but compressed: **2,299 positive**, **1,342 neutral**, **836 negative**. The lower positive-to-negative ratio on Glassdoor (2.7×) compared with Indeed (4.5×) suggests that Glassdoor reviewers, despite their broadly positive framing, surface more granular criticism - in line with the platform's structured pros/cons format.
+
+---
+
+### Sentiment Trends Over Time
+
+#### NRC Emotions by Time Period
+
+```{r sa-nrc-time, eval=TRUE}
+sentiment_n_by_time <- review_sentiments %>%
+  filter(Current_employee == FALSE) %>%
+  count(sentiment, time_segment, sort = TRUE) %>%
+  ungroup()
+
+sentiment_n_by_time_by_percent <- sentiment_n_by_time %>%
+  group_by(time_segment) %>%
+  mutate(percent = n / sum(n) * 100) %>%
+  ungroup()
+
+sentiment_n_by_time_by_percent %>%
+  mutate(time_segment = fct_relevel(
+    time_segment, "Pre-COVID", "Post-COVID to 12+ months ago (September 2023)", "6-12 months ago (September 2023 - February 2024", "Last 6 months (February 2024 - September 2024"
+  )) %>%
+  ggplot(aes(x = sentiment, y = percent, fill = sentiment)) +
+  geom_col() +
+  facet_wrap(~ time_segment, ncol = 1) +
+  labs(
+    title = "NRC Emotion Distribution by Time Period",
+    y = "Percentage (%)", x = NULL
+  ) +
+  coord_flip() +
+  theme_minimal() +
+  theme(
+    legend.position    = "none",
+    panel.grid.major   = element_blank(),
+    panel.grid.minor   = element_blank(),
+    panel.grid.major.x = element_line()
+  )
+
+#ggsave("Top words per sentiment by time.tiff", height = 14, width = 8, dpi = 700)
+```
+
+#### Bing Positive vs. Negative by Time Period
+
+```{r sa-bing-time, eval=TRUE}
+sentiment_n_PN_by_time <- review_sentiments_PN %>%
+  filter(Current_employee == FALSE) %>%
+  count(sentiment, time_segment, sort = TRUE) %>%
+  ungroup()
+
+sentiment_n_PN_by_time_by_percent <- sentiment_n_PN_by_time %>%
+  group_by(time_segment) %>%
+  mutate(percent = n / sum(n) * 100) %>%
+  ungroup()
+
+sentiment_n_PN_by_time_by_percent %>%
+  mutate(time_segment = fct_relevel(
+    time_segment, "Pre-COVID", "Post-COVID to 12+ months ago (September 2023)", "6-12 months ago (September 2023 - February 2024", "Last 6 months (February 2024 - September 2024"
+  )) %>%
+  ggplot(aes(x = sentiment, y = percent, fill = sentiment)) +
+  geom_col() +
+  facet_wrap(~ time_segment, nrow = 4) +
+  labs(
+    title = "Positive vs. Negative Sentiment by Time Period (Bing)",
+    y = "Percentage (%)", x = NULL
+  ) +
+  coord_flip() +
+  theme_minimal() +
+  theme(
+    legend.position    = "none",
+    panel.grid.major   = element_blank(),
+    panel.grid.minor   = element_blank(),
+    panel.grid.major.x = element_line()
+  )
+
+#ggsave("Top words per sentiment pos vs neg by time.tiff", height = 10, width = 6, dpi = 700)
+```
+
+#### AFINN Category Shares by Time Period
+
+```{r sa-afinn-time, eval=TRUE}
+sentiment_n_numeric_by_time <- review_sentiments_numeric %>%
+  filter(Current_employee == FALSE) %>%
+  count(sentiment_category, time_segment, sort = TRUE) %>%
+  ungroup()
+
+sentiment_n_numeric_by_time_by_percent <- sentiment_n_numeric_by_time %>%
+  group_by(time_segment) %>%
+  mutate(percent = n / sum(n) * 100) %>%
+  ungroup()
+
+sentiment_n_numeric_by_time_by_percent %>%
+  mutate(time_segment = fct_relevel(
+    time_segment, "Pre-COVID", "Post-COVID to 12+ months ago (September 2023)", "6-12 months ago (September 2023 - February 2024", "Last 6 months (February 2024 - September 2024"
+  )) %>%
+  ggplot(aes(x = sentiment_category, y = percent, fill = sentiment_category)) +
+  geom_col() +
+  facet_wrap(~ time_segment, ncol = 1) +
+  labs(
+    title = "AFINN Sentiment Category by Time Period",
+    x = "Sentiment Category", y = "Percent (%)"
+  ) +
+  coord_flip() +
+  theme_minimal() +
+  theme(
+    legend.position    = "none",
+    panel.grid.major   = element_blank(),
+    panel.grid.minor   = element_blank(),
+    panel.grid.major.x = element_line()
+  )
+
+#ggsave("Top words per sentiment pos neutr neg by time.tiff", height = 10, width = 6, dpi = 700)
+```
+
+#### Continuous Sentiment Trend (AFINN Score over Date)
+
+```{r sa-trend-facet, eval=TRUE}
+review_sentiments_numeric %>%
+  mutate(time_segment = fct_relevel(
+    time_segment, "Pre-COVID", "Post-COVID to 12+ months ago (September 2023)", "6-12 months ago (September 2023 - February 2024", "Last 6 months (February 2024 - September 2024"
+  )) %>%
+  ggplot(aes(x = Date, y = value)) +
+  geom_smooth(method = "loess", se = FALSE) +
+  facet_wrap(~ time_segment, scales = "free_x", ncol = 2, labeller = label_wrap_gen(width = 30)) +
+  labs(
+    title = "Average AFINN Sentiment Value Over Time (by Period)",
+    x = "Date", y = "Sentiment Value"
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid.major   = element_blank(),
+    panel.grid.minor   = element_blank(),
+    panel.grid.major.x = element_line(),
+    strip.text         = element_text(size = 12, face = "bold")
+  )
+
+#ggsave("Average positivity of sentiment over time.tiff", height = 8, width = 10, dpi = 700)
+```
+
+```{r sa-trend-overall, eval=TRUE}
+review_sentiments_numeric %>%
+  ggplot(aes(x = Date, y = value)) +
+  geom_smooth(method = "loess", se = FALSE) +
+  labs(
+    title = "Overall AFINN Sentiment Value Over Time",
+    x = "Date", y = "Sentiment Value"
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid.major   = element_blank(),
+    panel.grid.minor   = element_blank(),
+    panel.grid.major.x = element_line()
+  )
+
+#ggsave("Average positivity of sentiment over time without segregation.tiff", height = 8, width = 10, dpi = 700)
+```
+
+**Key finding - temporal trends:** All three lexicons point in the same direction across both platforms: **sentiment has declined from the pre-COVID era to the present**.
+
+- On **Indeed**, the LOESS trend line starts declining around 2015–2016 and recently crosses into **negative territory** in the most recent window - the starkest signal in the dataset. Emotions of *fear* and *anger* have grown relative to *joy* across successive periods.
+- On **Glassdoor**, the trajectory is similar though slightly less severe: sentiment has fallen consistently since 2020, but the **last 6 months (February–September 2024)** show a partial recovery toward *neutral* rather than tipping negative - a tentative sign of stabilisation.
+- The **combined dataset** reinforces both signals: AFINN scores peaked around **2018** before entering a sustained post-COVID decline, with the merged LOESS curve sitting below pre-COVID baselines throughout the most recent period.
+
+---
+
+## Key Findings
+
+### Indeed Reviews
+
+- The dominant NRC emotion is **positive** (**9,701** tokens), followed by *trust* (6,066), *anticipation* (3,647), and *joy* (2,535). Negative emotions are in the minority, led by *fear* (995) and *surprise* (910), with *disgust* the least represented (445).
+- The positive framing holds across all three lexicons: Bing returns **5,200 positive** vs. **2,345 negative** words; AFINN shows **4,076 positive**, **1,726 neutral**, and only **912 negative** tokens - a positive-to-negative ratio of roughly 4.5:1.
+- Temporally, the average sentiment has **declined from the pre-COVID period to the present**, with *fear* and *anger* growing and *joy* receding across successive periods. The AFINN trend line, which peaked around 2015–2016, crosses into **negative territory** in the most recent 6-month window - the most striking single finding in the dataset.
+
+### Glassdoor Reviews
+
+- Results mirror Indeed: *positive* leads (**5,245**), followed by *trust* (**3,198**) and *anticipation* (**2,090**). Unlike Indeed, *sadness* ranks above *fear* on Glassdoor - reflecting the platform's structured pros/cons format, which may elicit more reflective, disappointment-oriented language.
+- Bing: **2,917 positive** vs. **1,824 negative** (ratio ≈ 1.6:1 - lower than Indeed's 2.2:1). AFINN: **2,299 positive**, **1,342 neutral**, **836 negative**.
+- The downward trend is visible here too, but the **last 6-month window shows a partial recovery toward neutral** rather than negative - a tentative sign of stabilisation not present in the Indeed data.
+
+### Combined Picture
+
+When both datasets are merged, the long-run AFINN trend confirms a **peak around 2018** followed by a sustained decline through the post-COVID period. The merged LOESS curve sits below pre-COVID baselines throughout the most recent window, suggesting structural - rather than event-driven - shifts in employee experience at the firm.
