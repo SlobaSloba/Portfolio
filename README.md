@@ -2,7 +2,9 @@
 
 Hello, and welcome to my portfolio! 
 
-This is a project that I have started recently. I am adding my past and current projects that showcase my skills of data analysis in various fields. In this readme, you will find the links to the projects and summaries of what has been demonstrated in each of them. If you have any questions or would like to collaborate, reach out at: slobodan.pantelicc@gmail.com
+Below, you will find a variety of projects that I have either done for clients in the past, or have created using mock/online data to showcase my skills in fields where real data that I have worked with is proprietary or sensitive. For each of the projects, you will find a link to the HTML rendering of the .Rmd or .ipynb file, which will include the full code and output that was used for the analysis, along with comments outlining the steps I took and the interpretation of the output. 
+
+If you have any questions or would like to collaborate, reach out at: slobodan.pantelicc@gmail.com
 
 ## Projects Overview
 
@@ -11,13 +13,13 @@ This is a project that I have started recently. I am adding my past and current 
 - Scraped 10,000+ employee reviews from Glassdoor and Indeed via the Scrapfly API, handling JavaScript rendering and anti-scraping protections
 - Built a parallelised, fault-tolerant multi-page scraper with automatic checkpointing in R
 - Conducted sentiment analysis using three NLP lexicons (NRC, Bing, AFINN) to capture emotion categories, polarity, and numeric sentiment scores
-- Performed temporal analysis across four periods (Pre-COVID to present), uncovering a sustained post-2018 decline in employee sentiment
+- Performed temporal analysis across four periods (Pre-COVID to time of analysis), uncovering a sustained post-2018 decline in employee sentiment
 
 ---
 
 ### Churn Dataset Simulation  
 [Open Notebook](./Churn%20dataset%20simulation.html)
-- Built a synthetic dataset (100K users) to simulate realistic churn behavior  
+- Built a synthetic dataset (100K users) to simulate churn behavior  
 - Engineered behavioral and subscription-based features to reflect real-world drivers  
 - Embedded probabilistic churn logic to enable controlled experimentation  
 - Designed dataset for downstream analytics and predictive modeling workflows  
@@ -27,7 +29,7 @@ This is a project that I have started recently. I am adding my past and current 
 ### SQL Analysis (DuckDB)  
 [Open Notebook](./SQL%20analysis.html)
 - Analyzed relational data (users, subscriptions, activity logs) using DuckDB  
-- Wrote optimized SQL queries for joins, aggregations, and time-series analysis  
+- Wrote SQL queries for joins, aggregations, and time-series analysis  
 - Evaluated engagement, retention, and revenue-related metrics  
 - Translated query outputs into actionable business insights  
 
@@ -64,4 +66,4 @@ Change history: \
 18/03/2026: Created repo, added Churn dataset simulation (Python) and exploration (Python + SQL) \
 25/03/2026: Added Econometrics notebook (Python) \
 26/03/2026: Added Instagram NLP analysis (R) and Financial Inclusion project (R) \
-27/03/2026: Added Morgan Stanley Employee sentiment analysis (R) — web scraping + NLP
+27/03/2026: Added Morgan Stanley Employee sentiment analysis (R) 
