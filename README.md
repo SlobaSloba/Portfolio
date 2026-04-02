@@ -17,6 +17,15 @@ If you have any questions or would like to collaborate, reach out at: slobodan.p
 
 ---
 
+### Labour Economics: Remote Work & Mental Health
+[Open Report](./wfh_policy_report.html)
+- Estimated the causal effect of gaining a work-from-home option on mental health using LISS panel data (Netherlands, 2019–2024)
+- Applied a Difference-in-Differences design exploiting COVID-19 as an exogenous shock, with two-way fixed effects and wild-cluster bootstrap inference
+- Validated the parallel trends assumption visually and via placebo testing; excluded COVID-affected waves to isolate the WFH effect
+- Found a significant negative effect on MHI-5 scores, concentrated among parents and full-time employees, with policy recommendations
+
+---
+
 ### Churn Dataset Simulation  
 [Open Notebook](./Churn%20dataset%20simulation.html)
 - Built a synthetic dataset (100K users) to simulate churn behavior  
@@ -67,3 +76,4 @@ Change history: \
 25/03/2026: Added Econometrics notebook (Python) \
 26/03/2026: Added Instagram NLP analysis (R) and Financial Inclusion project (R) \
 27/03/2026: Added Morgan Stanley Employee sentiment analysis (R) 
+02/04/2026: Added Labour Economics: Remote Work & Mental Health (R + Stata)
