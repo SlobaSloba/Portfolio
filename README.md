@@ -7,6 +7,14 @@ Below, you will find a variety of projects that I have either done for clients i
 If you have any questions or would like to collaborate, reach out at: slobodan.pantelicc@gmail.com
 
 ## Projects Overview
+### Market Research: E-Commerce Sustainability Certifications
+[Open Notebook](./Sustainability_Market_Research_Portfolio.html)
+- Developed an asynchronous Python web scraper utilizing the Scrapfly API and `asyncio` to extract pricing, ratings, and certification badges from ~15,800 Amazon UK beauty products
+- Conducted statistical hypothesis testing (Welch’s t-tests, Levene's test) and calculated Cohen's *d* effect sizes to evaluate market outcome differences between certified and non-certified items
+- Trained and evaluated OLS and Random Forest regression models (`scikit-learn`, `statsmodels`) to predict price and engagement metrics based on specific sustainability badges
+- Analyzed consumer survey data (N=102) using Linear Mixed-Effects Models to estimate Green Perceived Value (GPV), measuring interactions between certification types, demographics, and environmental identity
+
+---
 
 ### NLP: Morgan Stanley Employee Sentiment Analysis
 [Open Notebook](./MS_Sentiment_Analysis_Portfolio.html)
@@ -75,5 +83,6 @@ Change history: \
 18/03/2026: Created repo, added Churn dataset simulation (Python) and exploration (Python + SQL) \
 25/03/2026: Added Econometrics notebook (Python) \
 26/03/2026: Added Instagram NLP analysis (R) and Financial Inclusion project (R) \
-27/03/2026: Added Morgan Stanley Employee sentiment analysis (R) 
-02/04/2026: Added Labour Economics: Remote Work & Mental Health (R + Stata)
+27/03/2026: Added Morgan Stanley Employee sentiment analysis (R) \
+02/04/2026: Added Labour Economics: Remote Work & Mental Health (R + Stata) \
+08/04/2026: Added Market Research: E-Commerce Sustainability Certifications (Python)
