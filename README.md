@@ -7,6 +7,17 @@ Below, you will find a variety of projects that I have either done for clients i
 If you have any questions or would like to collaborate, reach out at: slobodan.pantelicc@gmail.com
 
 ## Projects Overview
+
+### Developer Survey Analysis: Android vs. iOS
+[Open Notebook](./Mobile development survey analysis.html)
+
+- Cleaned and recoded a 5,000-respondent mobile developer survey using a codebook-driven recode map, handling three distinct response formats (single-choice ordinal, multi-select binary flags, and ranked platform preference)
+- Analysed platform reach across six mobile platforms, finding Android dominant at 81.5% total reach; examined cross-platform targeting patterns, showing iOS-primary developers are more likely to also target Android (56%) than the reverse (42%)
+- Profiled Android vs. iOS primary developers across geography, experience, organisation size, roles, app categories, and programming languages, identifying the most strategically relevant differences for a business audience
+- Found iOS developers are concentrated in high-income western markets and skew more senior (50.5% with 3+ years mobile experience vs. 33.6% for Android), while Android developers are more prevalent in emerging markets and more likely to work independently
+
+---
+
 ### Market Research: E-Commerce Sustainability Certifications
 [Open Notebook](./Sustainability_Market_Research_Portfolio.html)
 - Developed an asynchronous Python web scraper utilizing the Scrapfly API and `asyncio` to extract pricing, ratings, and certification badges from ~15,800 Amazon UK beauty products
@@ -85,4 +96,5 @@ Change history: \
 26/03/2026: Added Instagram NLP analysis (R) and Financial Inclusion project (R) \
 27/03/2026: Added Morgan Stanley Employee sentiment analysis (R) \
 02/04/2026: Added Labour Economics: Remote Work & Mental Health (R + Stata) \
-08/04/2026: Added Market Research: E-Commerce Sustainability Certifications (Python)
+08/04/2026: Added Market Research: E-Commerce Sustainability Certifications (Python) \
+10/06/2026: Added Market Research: Developer Survey Analysis: Android vs. iOS (Python
