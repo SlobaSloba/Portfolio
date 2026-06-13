@@ -27,6 +27,15 @@ If you have any questions or would like to collaborate, reach out at: slobodan.p
 
 ---
 
+### Data Visualization: UK Gender Disparity Dashboard
+[Open Dashboard](./Gender%20disparity%20UK%20dashboard.html)
+- Developed an interactive Tableau dashboard to visualize gender pay gap metrics and workforce representation across various UK industries and organizations
+- Engineered calculated fields, parameters, and interactive filters to allow users to dynamically explore wage differences by company size, sector, and geographic region
+- Designed accessible data visualizations to highlight systemic earnings disparities and easily identify sectors with the most significant wage gaps
+- Translated complex national demographic and salary data into an intuitive interface, facilitating data-driven storytelling and exploratory analysis
+
+---
+
 ### NLP: Morgan Stanley Employee Sentiment Analysis
 [Open Notebook](./MS_Sentiment_Analysis_Portfolio.html)
 - Scraped 10,000+ employee reviews from Glassdoor and Indeed via the Scrapfly API, handling JavaScript rendering and anti-scraping protections
@@ -97,4 +106,5 @@ Change history: \
 27/03/2026: Added Morgan Stanley Employee sentiment analysis (R) \
 02/04/2026: Added Labour Economics: Remote Work & Mental Health (R + Stata) \
 08/04/2026: Added Market Research: E-Commerce Sustainability Certifications (Python) \
-10/06/2026: Added Market Research: Developer Survey Analysis: Android vs. iOS (Python
+10/06/2026: Added Market Research: Developer Survey Analysis: Android vs. iOS (Python) \
+13/06/2026: Added Data Visualization: UK Gender Disparity Dashboard (Tableau) \
