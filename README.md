@@ -8,6 +8,17 @@ If you have any questions or would like to collaborate, reach out at: slobodan.p
 
 ## Projects Overview
 
+### Cardiovascular Risk: Lipoprotein(a) & ASCVD Discrimination Analysis
+
+[Open Report](./Cardiovascular-health.html)
+
+- Evaluated whether Lipoprotein(a) improves on standard ASCVD risk categories as a predictor of subclinical atherosclerosis, using logistic regression on a de-identified clinical dataset (~2,000 patients)
+- Benchmarked discrimination via ROC/AUC analysis (AUC package): the ASCVD 10-year risk score achieved an AUC of 0.713, while Lp(a) alone performed near chance (AUC ≈ 0.48)
+- Modeled 7-year time-to-revascularization (CABG/PCI) via Kaplan-Meier survival analysis (survival, survminer), then simulated hazard-based survival curves from ASCVD scores to validate calibration against observed outcomes
+- Extended the analysis to family history/statin scenario modeling and Aortic Stenosis prediction, finding Lp(a) added no incremental value in either case — concluding ASCVD risk scores alone fully capture the available predictive signal in this cohort
+
+---
+
 ### Developer Survey Analysis: Android vs. iOS
 [Open Notebook](./Mobile development survey analysis.html)
 
@@ -108,3 +119,4 @@ Change history: \
 08/04/2026: Added Market Research: E-Commerce Sustainability Certifications (Python) \
 10/06/2026: Added Market Research: Developer Survey Analysis: Android vs. iOS (Python) \
 13/06/2026: Added Data Visualization: UK Gender Disparity Dashboard (Tableau) \
+08/07/2026: Added Cardiovascular Risk: Lipoprotein(a) & ASCVD Discrimination Analysis (R)
