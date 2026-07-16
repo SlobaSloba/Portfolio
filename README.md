@@ -30,6 +30,16 @@ If you have any questions or would like to collaborate, reach out at: slobodan.p
 
 ---
 
+### Epidemiology: Allergy & Wheeze Risk Factor Analysis
+[Open Report](./Allergy-and-wheeze-analysis.html)
+
+- Analyzed observational clinical data to evaluate environmental, biological, and demographic risk factors associated with allergy and wheezing prevalence
+- Built multivariable logistic regression models in R to estimate adjusted odds ratios (aORs), establishing key predictors while controlling for confounding variables
+- Conducted regression diagnostics and multicollinearity checks to validate model assumptions and ensure epidemiological rigor
+- Generated reproducible, deliver-ready tables and visualizations (TFLs) translating complex statistical associations into clear risk profiles for clinical stakeholders
+
+---
+
 ### Developer Survey Analysis: Android vs. iOS
 [Open Notebook](./Mobile development survey analysis.html)
 
@@ -130,4 +140,5 @@ Change history: \
 08/04/2026: Added Market Research: E-Commerce Sustainability Certifications (Python) \
 10/06/2026: Added Market Research: Developer Survey Analysis: Android vs. iOS (Python) \
 13/06/2026: Added Data Visualization: UK Gender Disparity Dashboard (Tableau) \
-08/07/2026: Added Cardiovascular Risk: Lipoprotein(a) & ASCVD Discrimination Analysis (R)
+08/07/2026: Added Cardiovascular Risk: Lipoprotein(a) & ASCVD Discrimination Analysis (R) \
+16/07/2026: Added Epidemiology: Allergy & Wheeze Risk Factor Analysis and Real-World Evidence: Patient-Reported Outcomes After Stem Cell Injection Therapy (R)
