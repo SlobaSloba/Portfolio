@@ -19,6 +19,17 @@ If you have any questions or would like to collaborate, reach out at: slobodan.p
 
 ---
 
+### Real-World Evidence: Patient-Reported Outcomes After Stem Cell Injection Therapy
+
+[Open Report](./Hospital-data-project.html)
+
+- Analyzed real-world, non-randomized clinical data from patients receiving stem cell injection therapy (autologous fat- or bone-marrow-derived) for pain management, tracking nine patient-reported outcomes (PROs) — anxiety, depression, four pain domains, physical/mental health, and social role functioning — across an irregular, up-to-one-year follow-up schedule (baseline through day 365)
+- Modeled each PRO trajectory with linear mixed-effects models (`lme4`/`lmerTest`, one random intercept per patient) and derived estimated marginal means and contrasts against baseline via `emmeans`, with Benjamini–Hochberg FDR correction across all simultaneous tests
+- Constructed a time-varying stem-cell-source exposure variable that avoids immortal time bias to compare fat-derived vs. bone-marrow-derived cells, addressing confounding by indication inherent to non-randomized therapy selection
+- Found statistically significant, clinically consistent reductions in pain intensity, behavior, and interference (most pronounced around day 90), no detectable change in psychological/general-health outcomes, and transparently reported that no exposure comparison survived multiple-testing correction
+
+---
+
 ### Developer Survey Analysis: Android vs. iOS
 [Open Notebook](./Mobile development survey analysis.html)
 
