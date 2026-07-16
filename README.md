@@ -31,7 +31,7 @@ If you have any questions or would like to collaborate, reach out at: slobodan.p
 ---
 
 ### Epidemiology: Allergy & Wheeze Risk Factor Analysis
-[Open Report](./Allergy-and-wheeze-analysis.html)
+[Open Report](./allergy_analysis.html)
 
 - Analyzed observational clinical data to evaluate environmental, biological, and demographic risk factors associated with allergy and wheezing prevalence
 - Built multivariable logistic regression models in R to estimate adjusted odds ratios (aORs), establishing key predictors while controlling for confounding variables
