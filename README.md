@@ -8,6 +8,24 @@ If you have any questions or would like to collaborate, reach out at: slobodan.p
 
 ## Projects Overview
 
+### Econometrics: Homeownership Analysis  
+[Open Notebook](./Econometrics.html)
+- Modeled time-to-homeownership using survival analysis techniques  
+- Applied log-rank tests to compare demographic groups  
+- Built logistic regression models to estimate ownership probability  
+- Analyzed income mobility and its impact on housing outcomes  
+
+---
+
+### Financial Inclusion, Digital Trust, and Economic Growth
+[Open Report](./Trust-in-banks---portfolio-project.html)
+- Investigated the relationship between digital trust, financial inclusion, and macroeconomic indicators
+- Conducted statistical analysis to identify key drivers of user trust in digital banking environments
+- Evaluated demographic and behavioral factors influencing financial participation and adoption
+- Synthesized findings to provide actionable insights on digital financial engagement
+
+---
+
 ### Cardiovascular Risk: Lipoprotein(a) & ASCVD Discrimination Analysis
 
 [Open Report](./Cardiovascular-health.html)
@@ -104,14 +122,6 @@ If you have any questions or would like to collaborate, reach out at: slobodan.p
 
 ---
 
-### Econometrics: Homeownership Analysis  
-[Open Notebook](./Econometrics.html)
-- Modeled time-to-homeownership using survival analysis techniques  
-- Applied log-rank tests to compare demographic groups  
-- Built logistic regression models to estimate ownership probability  
-- Analyzed income mobility and its impact on housing outcomes  
-
----
 
 ### NLP: Instagram Influencer Messaging
 [Open Report](./Instagram-analysis.html)
@@ -119,15 +129,6 @@ If you have any questions or would like to collaborate, reach out at: slobodan.p
 - Performed sentiment analysis leveraging the NRC emotion lexicon
 - Applied Latent Dirichlet Allocation (LDA) for topic modeling, utilizing quantitative criteria for rigorous model selection
 - Mapped comparative corpus structures using tf-idf weighting and `igraph` network visualizations
-
----
-
-### Financial Inclusion, Digital Trust, and Economic Growth
-[Open Report](./Trust-in-banks---portfolio-project.html)
-- Investigated the relationship between digital trust, financial inclusion, and macroeconomic indicators
-- Conducted statistical analysis to identify key drivers of user trust in digital banking environments
-- Evaluated demographic and behavioral factors influencing financial participation and adoption
-- Synthesized findings to provide actionable insights on digital financial engagement
 
 ---
 
